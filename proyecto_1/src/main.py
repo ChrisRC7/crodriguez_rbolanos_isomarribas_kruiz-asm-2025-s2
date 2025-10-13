@@ -1,8 +1,8 @@
-import numpy, scipy, fft
-from scipy.io import wavfile
-from matplotlib import pyplot as plt
+import fft
 import tkinter as tk
 from tkinter import filedialog
+from scipy.io import wavfile
+from matplotlib import pyplot as plt
 
 class Gui():
 

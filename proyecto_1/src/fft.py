@@ -13,8 +13,6 @@ class FFT:
             xf = scipy.fft.rfftfreq(N, 1 / SAMPLE_RATE)
 
 
-            # --- 4. Interpretar Magnitud y Fase (graficando) ---
-
             print("Mostrando las gráficas de magnitud y fase. Ciérralas para continuar.")
 
             # Crear una figura para ambas gráficas

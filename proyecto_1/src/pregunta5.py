@@ -1,8 +1,5 @@
 """
 Pregunta 5: Modulación y Demodulación FSK usando FFT
-Autor: Grupo de Trabajo
-Fecha: 2025
-
 Este script implementa un sistema completo de modulación FSK (Frequency Shift Keying)
 y demodulación usando la clase FFT para recuperación de datos digitales.
 """

@@ -107,7 +107,7 @@ class MainApp:
         
         desc_pregunta5 = tk.Label(
             frame_descripciones,
-            text="• Genera señales o carga archivo WAV\n• Filtra ruido usando FFT",
+            text="• Genera señales con FSK\n• Filtra ruido",
             font=("Helvetica", 10),
             bg='#2c3e50',
             fg='#bdc3c7',

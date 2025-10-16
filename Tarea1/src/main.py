@@ -175,7 +175,7 @@ class MainApp:
             print("Calculando FFT...")
             fft.FFT(normalized_tone, SAMPLE_RATE)
             
-            print("✓ Análisis completado exitosamente")
+            print("Análisis completado exitosamente")
             messagebox.showinfo("Éxito", "Análisis FFT completado. Las gráficas se han mostrado.")
             
         except Exception as e:
@@ -225,7 +225,7 @@ class MainApp:
                 print("Errores:", resultado.stderr)
             
             if resultado.returncode == 0:
-                print("✓ Proceso completado exitosamente")
+                print("Proceso completado exitosamente")
                 messagebox.showinfo(
                     "Éxito",
                     "Modulación y demodulación completadas.\n"

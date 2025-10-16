@@ -169,12 +169,12 @@ def main():
     print("\n[PASO 1] Generando bits aleatorios...")
     data_bits = np.random.randint(0, 2, size=num_bits)
     bits_str = ''.join(map(str, data_bits))
-    print(f"  ✓ Bits: {bits_str}")
+    print(f"Bits: {bits_str}")
     
     # PASO 2: Modular
     print("\n[PASO 2] Modulando con FSK...")
     modulated_signal = modulate_fsk(data_bits, FREQ_BIT_0, FREQ_BIT_1, SYMBOL_DURATION, SAMPLE_RATE)
-    print(f"  ✓ Señal modulada: {len(modulated_signal)} muestras")
+    print(f"Señal modulada: {len(modulated_signal)} muestras")
     
     # Graficar señal modulada limpia
     print("\n  Mostrando señal modulada (limpia)...")
@@ -194,7 +194,7 @@ def main():
     modulated_norm = normalize_audio(modulated_signal)
     modulated_path = os.path.join(output_dir, "fsk_modulated_clean.wav")
     scipy.io.wavfile.write(modulated_path, SAMPLE_RATE, modulated_norm)
-    print(f"  ✓ Guardada: {modulated_path}")
+    print(f"Guardada: {modulated_path}")
     
     # PASO 2.5: Agregar ruido
     print("\n[PASO 2.5] Configurando canal de transmisión...")
@@ -205,7 +205,7 @@ def main():
     
     print(f"\n  Agregando ruido AWGN...")
     modulated_noisy, noise = add_awgn_noise(modulated_signal, snr_db)
-    print(f"  ✓ SNR: {snr_db} dB")
+    print(f"SNR: {snr_db} dB")
     
     # Graficar señal con ruido
     print("\n  Mostrando señal modulada (con ruido)...")
@@ -222,12 +222,12 @@ def main():
     modulated_noisy_norm = normalize_audio(modulated_noisy)
     modulated_noisy_path = os.path.join(output_dir, "fsk_modulated_noisy.wav")
     scipy.io.wavfile.write(modulated_noisy_path, SAMPLE_RATE, modulated_noisy_norm)
-    print(f"  ✓ Guardada: {modulated_noisy_path}")
+    print(f"Guardada: {modulated_noisy_path}")
     
     # PASO 3: FFT
     print("\n[PASO 3] Analizando espectro con FFT...")
     fft_analyzer = fft.FFT(modulated_noisy_norm, SAMPLE_RATE, mostrar_graficas=False)
-    print(f"  ✓ FFT calculada")
+    print(f"FFT calculada")
     
     print("\n  Mostrando espectro...")
     fft_analyzer.mostrar_espectro()
@@ -236,12 +236,12 @@ def main():
     print("\n[PASO 4] Demodulando...")
     demodulated_bits, confidence = demodulate_fsk_with_confidence(modulated_noisy, FREQ_BIT_0, FREQ_BIT_1, SYMBOL_DURATION, SAMPLE_RATE)
     demod_str = ''.join(map(str, demodulated_bits))
-    print(f"  ✓ Bits recuperados: {demod_str}")
+    print(f"Bits recuperados: {demod_str}")
     
     # PASO 4.5: Reconstruir señal
     print("\n[PASO 4.5] Sintetizando señal desde bits...")
     demodulated_signal = demodulated_bits_to_signal(demodulated_bits, FREQ_BIT_0, FREQ_BIT_1, SYMBOL_DURATION, SAMPLE_RATE)
-    print(f"  ✓ Señal sintetizada: {len(demodulated_signal)} muestras")
+    print(f"Señal sintetizada: {len(demodulated_signal)} muestras")
     
     # Graficar señal demodulada
     print("\n  Mostrando señal demodulada...")
@@ -258,7 +258,7 @@ def main():
     demodulated_norm = normalize_audio(demodulated_signal)
     demodulated_path = os.path.join(output_dir, "fsk_demodulated.wav")
     scipy.io.wavfile.write(demodulated_path, SAMPLE_RATE, demodulated_norm)
-    print(f"  ✓ Guardada: {demodulated_path}")
+    print(f"Guardada: {demodulated_path}")
     
     # PASO 5: Análisis de errores
     print("\n[PASO 5] Análisis de Desempeño...")

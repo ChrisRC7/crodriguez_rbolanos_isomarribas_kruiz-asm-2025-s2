@@ -17,7 +17,8 @@ class MainApp:
         # Crear ventana principal
         self.root = tk.Tk()
         self.root.title("Sistema de Procesamiento Digital de Señales")
-        self.root.geometry("600x400")
+        self.root.geometry("1000x500")
+        self.root.minsize(1000, 500)  # asegura ancho suficiente para 3 botones
         self.root.resizable(False, False)
         
         # Configurar estilo
@@ -90,6 +91,24 @@ class MainApp:
             cursor="hand2"
         )
         btn_pregunta5.grid(row=0, column=1, padx=20)
+
+        # Nuevo botón: Análisis FM (ejecuta fm2.py)
+        btn_analisis_fm = tk.Button(
+            frame_botones,
+            text="Análisis FM\nFM con FFT",
+            command=self.ejecutar_analisis_fm,
+            font=("Helvetica", 14, "bold"),
+            bg='#27ae60',
+            fg='white',
+            activebackground='#1e8449',
+            activeforeground='white',
+            width=20,
+            height=4,
+            relief=tk.RAISED,
+            bd=3,
+            cursor="hand2"
+        )
+        btn_analisis_fm.grid(row=0, column=2, padx=20)
         
         # Descripción de funcionalidades
         frame_descripciones = tk.Frame(self.root, bg='#2c3e50')
@@ -114,6 +133,17 @@ class MainApp:
             justify=tk.LEFT
         )
         desc_pregunta5.grid(row=0, column=1, padx=30)
+
+        # Descripción para Análisis FM
+        desc_analisis_fm = tk.Label(
+            frame_descripciones,
+            text="• Modulación FM\n• Demodulación por FFT (Hilbert)",
+            font=("Helvetica", 10),
+            bg='#2c3e50',
+            fg='#bdc3c7',
+            justify=tk.LEFT
+        )
+        desc_analisis_fm.grid(row=0, column=2, padx=30)
         
         # Botón Salir
         btn_salir = tk.Button(
@@ -240,6 +270,51 @@ class MainApp:
                 
         except Exception as e:
             print(f"Error al ejecutar pregunta5.py: {e}")
+            messagebox.showerror("Error", f"No se pudo ejecutar el proceso:\n{e}")
+    
+    def ejecutar_analisis_fm(self):
+        """Ejecuta el análisis FM (modulación/demodulación con FFT) usando fm2.py"""
+        print("\n" + "="*60)
+        print("ANÁLISIS FM: MODULACIÓN/DEMODULACIÓN CON FFT")
+        print("="*60)
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            fm2_path = os.path.join(script_dir, "fm2.py")
+
+            if not os.path.exists(fm2_path):
+                print(f"No se encontró fm2.py en: {script_dir}")
+                messagebox.showerror(
+                    "Error",
+                    "No se encontró 'fm2.py'. Asegúrate de que esté en el mismo directorio que main.py"
+                )
+                return
+
+            print("Ejecutando fm2.py...\n")
+            resultado = subprocess.run(
+                [sys.executable, fm2_path],
+                capture_output=True,
+                text=True,
+                cwd=script_dir
+            )
+
+            if resultado.stdout:
+                print(resultado.stdout)
+            if resultado.stderr:
+                print("Errores:", resultado.stderr)
+
+            if resultado.returncode == 0:
+                print("✓ Proceso completado exitosamente")
+                messagebox.showinfo(
+                    "Éxito",
+                    "Análisis FM completado.\nRevisa la carpeta 'out_FM' en la raíz del proyecto."
+                )
+            else:
+                messagebox.showerror(
+                    "Error",
+                    f"Hubo un error al ejecutar fm2.py\nCódigo de retorno: {resultado.returncode}"
+                )
+        except Exception as e:
+            print(f"Error al ejecutar fm2.py: {e}")
             messagebox.showerror("Error", f"No se pudo ejecutar el proceso:\n{e}")
     
     def salir(self):

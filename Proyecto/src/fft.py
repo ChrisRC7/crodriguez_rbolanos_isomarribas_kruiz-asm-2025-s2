@@ -1,5 +1,6 @@
-import scipy, numpy
+from scipy.fft import rfft, rfftfreq, irfft
 from matplotlib import pyplot as plt
+import numpy as np
 
 class FFT:
     def __init__(self, normalized_tone, SAMPLE_RATE, mostrar_graficas=True):
@@ -18,13 +19,13 @@ class FFT:
         N = len(normalized_tone)
 
         # Aplicar la FFT
-        self.yf = scipy.fft.rfft(normalized_tone)
-        self.xf = scipy.fft.rfftfreq(N, 1 / SAMPLE_RATE)
+        self.yf = rfft(normalized_tone)
+        self.xf = rfftfreq(N, 1 / SAMPLE_RATE)
         
         # Mostrar gráficas si se solicita
         if mostrar_graficas:
             self.mostrar_espectro()
-    
+
     def mostrar_espectro(self):
         """Muestra las gráficas de magnitud y fase del espectro."""
         print("Mostrando las gráficas de magnitud y fase. Ciérralas para continuar.")
@@ -34,7 +35,7 @@ class FFT:
 
         # Gráfica de Magnitud
         plt.subplot(2, 1, 1)
-        plt.plot(self.xf, numpy.abs(self.yf))
+        plt.plot(self.xf, np.abs(self.yf))
         plt.title("Espectro de Magnitud")
         plt.xlabel("Frecuencia (Hz)")
         plt.ylabel("Magnitud")
@@ -42,16 +43,16 @@ class FFT:
 
         # Gráfica de Fase
         plt.subplot(2, 1, 2)
-        plt.plot(self.xf, numpy.angle(self.yf))
+        plt.plot(self.xf, np.angle(self.yf))
         plt.title("Espectro de Fase")
         plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Fase (radianes)")
+        plt.ylabel("Fase (rad)")
         plt.grid(True)
 
         # Ajustar el espaciado y mostrar las gráficas
         plt.tight_layout()
         plt.show()
-    
+
     def get_spectrum(self):
         """
         Retorna el espectro calculado.
@@ -61,7 +62,7 @@ class FFT:
             yf: Vector de coeficientes FFT (complejos)
         """
         return self.xf, self.yf
-    
+
     def filtrar_frecuencia(self, frecuencia_objetivo, ancho_banda=1):
         """
         Filtra una frecuencia específica del espectro.
@@ -73,22 +74,17 @@ class FFT:
         Retorna:
             yf_filtrado: Espectro filtrado
         """
-        # Calcular el índice correspondiente a la frecuencia objetivo
-        points_per_freq = len(self.xf) / (self.SAMPLE_RATE / 2)
-        target_idx = int(points_per_freq * frecuencia_objetivo)
+        idx = np.argmin(np.abs(self.xf - frecuencia_objetivo))
+        yf2 = self.yf.copy()
+        k = max(1, int(ancho_banda))
+        i0 = max(0, idx - k)
+        i1 = min(len(yf2) - 1, idx + k)
+        yf2[i0:i1+1] = 0
         
-        # Crear copia del espectro
-        yf_filtrado = self.yf.copy()
+        print(f"Frecuencia {frecuencia_objetivo} Hz filtrada (bins {i0} a {i1})")
         
-        # Anular la componente objetivo
-        inicio = max(0, target_idx - ancho_banda)
-        fin = min(len(yf_filtrado), target_idx + ancho_banda + 1)
-        yf_filtrado[inicio:fin] = 0
-        
-        print(f"Frecuencia {frecuencia_objetivo} Hz filtrada (bins {inicio} a {fin-1})")
-        
-        return yf_filtrado
-    
+        return yf2
+
     def reconstruir_senal(self, yf_filtrado):
         """
         Reconstruye la señal en el dominio del tiempo usando iFFT.
@@ -99,35 +95,4 @@ class FFT:
         Retorna:
             señal reconstruida
         """
-        return scipy.fft.irfft(yf_filtrado)
-    
-    def mostrar_comparacion_espectros(self, yf_filtrado, titulo_original="Espectro Original", 
-                                     titulo_filtrado="Espectro Filtrado"):
-        """
-        Muestra una comparación entre el espectro original y el filtrado.
-        
-        Parámetros:
-            yf_filtrado: Espectro filtrado
-            titulo_original: Título para el espectro original
-            titulo_filtrado: Título para el espectro filtrado
-        """
-        plt.figure(figsize=(12, 8))
-        
-        # Espectro original
-        plt.subplot(2, 1, 1)
-        plt.plot(self.xf, numpy.abs(self.yf))
-        plt.title(titulo_original)
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Magnitud")
-        plt.grid(True, alpha=0.3)
-        
-        # Espectro filtrado
-        plt.subplot(2, 1, 2)
-        plt.plot(self.xf, numpy.abs(yf_filtrado))
-        plt.title(titulo_filtrado)
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Magnitud")
-        plt.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.show()
+        return irfft(yf_filtrado, n=len(self.normalized_tone))

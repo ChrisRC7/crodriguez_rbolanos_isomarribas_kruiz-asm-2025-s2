@@ -52,16 +52,20 @@ class FMModulationExperiment:
         self.delta_f = None
         self.demod_lpf_cutoff = None
         
-    def generate_message_signal(self, frequencies=[440, 880], amplitudes=[1.0, 0.5]):
+    def generate_message_signal(self, frequency=440, amplitude=1.0):
         """
-        Genera señal de mensaje (suma de senoidales) y normaliza a |x|<=1
+        Genera señal de mensaje senoidal pura y normaliza a |x|<=1
+        Parámetros:
+        - frequency: Frecuencia del seno en Hz (por defecto 440 Hz = La musical)
+        - amplitude: Amplitud antes de normalizar
         """
-        self.message = np.zeros_like(self.t, dtype=float)
-        for freq, amp in zip(frequencies, amplitudes):
-            self.message += amp * np.sin(2 * np.pi * freq * self.t)
+        self.message = amplitude * np.sin(2 * np.pi * frequency * self.t)
         
+        # Normalizar a [-1, 1]
         peak = np.max(np.abs(self.message)) + 1e-12
         self.message = self.message / peak
+        
+        print(f"   ✓ Señal senoidal generada: {frequency} Hz")
         return self.message
     
     def fm_modulate(self):
@@ -172,28 +176,45 @@ class FMModulationExperiment:
     
     def fm_demodulate_fft(self):
         """
-        Demodula la señal FM usando fase instantánea (Hilbert):
-        f_inst = (1/2π) dφ/dt  ->  (f_inst - f_c)/k_f ≈ m(t)
+        Demodula FM usando fase instantánea (Hilbert).
+        Mejoras: gradient, filtro DC-block, LPF más selectivo.
         """
         if not hasattr(self, "tuned_signal"):
             raise RuntimeError("Primero sintoniza la señal con tune_signal().")
         
+        # Señal analítica y fase instantánea
         analytic_signal = signal.hilbert(self.tuned_signal)
         instantaneous_phase = np.unwrap(np.angle(analytic_signal))
         
-        # dφ/dt -> frecuencia instantánea (usar gradient para evitar desfase de 1/2 muestra)
+        # Frecuencia instantánea (gradient evita desfase de 1/2 muestra)
         inst_freq = np.gradient(instantaneous_phase) * self.fs / (2 * np.pi)
         
+        # Quitar portadora y normalizar por kf
         demod = (inst_freq - self.fc) / self.kf
+        
+        # 1) Remover DC residual
         demod = demod - np.mean(demod)
-        cutoff = min(max(1.5 * (self.fm_max_est or 3000.0), 100.0), 0.45*self.fs)
-        b, a = signal.butter(5, cutoff / (0.5*self.fs), btype='low')
-        demod = signal.filtfilt(b, a, demod)
+        
+        # 2) Filtro pasa-altos (DC-block) para eliminar pedestal en baja frecuencia
+        hp_cutoff = 20.0  # Hz, ajustar según tu señal
+        sos_hp = signal.butter(4, hp_cutoff / (0.5*self.fs), btype='high', output='sos')
+        demod = signal.sosfilt(sos_hp, demod)
+        
+        # 3) Filtro pasa-bajos (recuperar solo el mensaje, rechazar ruido)
+        cutoff = min(max(1.5 * (self.fm_max_est or 1000.0), 100.0), 0.45*self.fs)
+        sos_lp = signal.butter(6, cutoff / (0.5*self.fs), btype='low', output='sos')  # orden 6
+        demod = signal.sosfiltfilt(sos_lp, demod)  # filtfilt para fase cero
+        
         self.demod_lpf_cutoff = float(cutoff)
+        
+        # 4) Normalizar RMS para que coincida con el mensaje original
         rms_msg = np.sqrt(np.mean(self.message**2)) + 1e-12
         rms_dem = np.sqrt(np.mean(demod**2)) + 1e-12
         demod *= (rms_msg / rms_dem)
+        
+        # 5) Clip para evitar saturación en el WAV
         demod = np.clip(demod, -1.0, 1.0)
+        
         self.demodulated = demod
         return self.demodulated
     
@@ -417,6 +438,129 @@ class FMModulationExperiment:
         plt.savefig(os.path.join(self.output_dir, 'fm2_mag_phase_fft_like.png'), dpi=300, bbox_inches='tight')
         plt.show()
     
+    # Estima τ (retardo) y φ0 (offset de fase) al estilo fft.py
+    def estimate_phase_alignment_fft_like(self, fmax_view=3000.0, rel_thr=0.01):
+        N = min(len(self.message), len(self.demodulated))
+        msg = self.message[:N]
+        dem = self.demodulated[:N]
+
+        xf_msg, yf_msg = FFT(msg, self.fs, mostrar_graficas=False).get_spectrum()
+        xf_dem, yf_dem = FFT(dem, self.fs, mostrar_graficas=False).get_spectrum()
+
+        amp_msg = np.abs(yf_msg)
+        amp_dem = np.abs(yf_dem)
+        mask_f = (xf_msg > 0) & (xf_msg <= float(fmax_view))
+        thr = rel_thr * (amp_msg.max() + 1e-12)
+        mask = mask_f & (amp_msg >= thr) & (amp_dem >= thr)
+
+        if not np.any(mask):
+            return 0.0, 0.0, 0
+
+        f = xf_msg[mask]
+        phi_diff = np.unwrap(np.angle(yf_dem[mask]) - np.angle(yf_msg[mask]))
+
+        w = np.minimum(amp_msg[mask], amp_dem[mask])
+        X = np.vstack([f, np.ones_like(f)]).T
+        coef, _, _, _ = np.linalg.lstsq((X * w[:, None]), (phi_diff * w), rcond=None)
+        slope, phi0 = coef[0], coef[1]
+        tau = -slope / (2*np.pi)
+        return float(tau), float(phi0), int(np.count_nonzero(mask))
+
+    # Graficar magnitud y fase "fft.py-like" con fase alineada
+    def plot_mag_phase_fft_like_aligned(self, fmax_view=3000.0, rel_thr=0.01):
+        N = min(len(self.message), len(self.demodulated))
+        msg = self.message[:N]
+        dem = self.demodulated[:N]
+
+        xf_msg, yf_msg = FFT(msg, self.fs, mostrar_graficas=False).get_spectrum()
+        xf_dem, yf_dem = FFT(dem, self.fs, mostrar_graficas=False).get_spectrum()
+
+        tau, phi0, used = self.estimate_phase_alignment_fft_like(fmax_view=fmax_view, rel_thr=rel_thr)
+
+        # Corregir fase del demodulado en frecuencia
+        phase_rot = np.exp(1j * (2*np.pi*xf_dem*tau - phi0))
+        yf_dem_corr = yf_dem * phase_rot
+
+        mask_msg = xf_msg <= float(fmax_view)
+        mask_dem = xf_dem <= float(fmax_view)
+
+        plt.figure(figsize=(12, 8))
+        # Magnitud
+        plt.subplot(2, 1, 1)
+        plt.plot(xf_msg[mask_msg], np.abs(yf_msg[mask_msg]), label='Mensaje', color='b')
+        plt.plot(xf_dem[mask_dem], np.abs(yf_dem[mask_dem]), label='Demodulado', color='m', alpha=0.6)
+        plt.plot(xf_dem[mask_dem], np.abs(yf_dem_corr[mask_dem]), label='Demod (alineado)', color='g', alpha=0.9)
+        plt.title("Espectro de Magnitud (fft.py) con demod alineado")
+        plt.xlabel("Frecuencia (Hz)")
+        plt.ylabel("Magnitud |Y(f)|")
+        plt.grid(True); plt.legend()
+
+        # Fase cruda, demod corregido
+        plt.subplot(2, 1, 2)
+        plt.plot(xf_msg[mask_msg], np.angle(yf_msg[mask_msg]), label='Mensaje', color='b')
+        plt.plot(xf_dem[mask_dem], np.angle(yf_dem[mask_dem]), label='Demod (sin alinear)', color='m', alpha=0.6)
+        plt.plot(xf_dem[mask_dem], np.angle(yf_dem_corr[mask_dem]), label='Demod (alineado)', color='g', alpha=0.9)
+        plt.title(f"Espectro de Fase (fft.py) alineado | τ≈{tau*1e3:.3f} ms, φ0≈{phi0:.3f} rad, bins={used}")
+        plt.xlabel("Frecuencia (Hz)")
+        plt.ylabel("Fase ∠Y(f) [rad]")
+        plt.grid(True); plt.legend()
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'fm2_mag_phase_fft_like_aligned.png'),
+                    dpi=300, bbox_inches='tight')
+        plt.show()
+
+    # Gráfica limpia: solo muestra fase donde la magnitud es significativa
+    def plot_mag_phase_fft_like_clean(self, fmax_view=2000.0, mag_threshold_rel=0.02):
+        N = min(len(self.message), len(self.demodulated))
+        msg = self.message[:N]
+        dem = self.demodulated[:N]
+
+        xf_msg, yf_msg = FFT(msg, self.fs, mostrar_graficas=False).get_spectrum()
+        xf_dem, yf_dem = FFT(dem, self.fs, mostrar_graficas=False).get_spectrum()
+
+        amp_msg = np.abs(yf_msg)
+        amp_dem = np.abs(yf_dem)
+        
+        mask_freq = xf_msg <= fmax_view
+        thr = mag_threshold_rel * amp_msg.max()
+        mask_mag_msg = amp_msg >= thr
+        mask_mag_dem = amp_dem >= thr
+
+        plt.figure(figsize=(12, 8))
+        
+        # Magnitud
+        plt.subplot(2, 1, 1)
+        plt.plot(xf_msg[mask_freq], amp_msg[mask_freq], label='Mensaje', color='b', linewidth=1.5)
+        plt.plot(xf_dem[mask_freq], amp_dem[mask_freq], label='Demodulado', color='m', alpha=0.8, linewidth=1.5)
+        plt.title("Magnitud (fft.py)")
+        plt.xlabel("Frecuencia (Hz)")
+        plt.ylabel("Magnitud |Y(f)|")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # Fase (solo donde magnitud es suficiente)
+        plt.subplot(2, 1, 2)
+        mask_plot_msg = mask_freq & mask_mag_msg
+        plt.plot(xf_msg[mask_plot_msg], np.angle(yf_msg[mask_plot_msg]), 
+                 'o', color='b', markersize=4, label='Mensaje (fase válida)')
+        
+        mask_plot_dem = mask_freq & mask_mag_dem
+        plt.plot(xf_dem[mask_plot_dem], np.angle(yf_dem[mask_plot_dem]), 
+                 'x', color='m', markersize=4, alpha=0.8, label='Demodulado (fase válida)')
+        
+        plt.axhline(-np.pi/2, color='gray', linestyle='--', linewidth=0.8, label='Fase esperada sin(2πft)')
+        plt.title(f"Fase (fft.py) - filtrada por magnitud > {mag_threshold_rel:.3f}·max")
+        plt.xlabel("Frecuencia (Hz)")
+        plt.ylabel("Fase ∠Y(f) [rad]")
+        plt.ylim(-np.pi - 0.5, np.pi + 0.5)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.output_dir, 'fm2_mag_phase_clean.png'), dpi=300, bbox_inches='tight')
+        plt.show()
+    
     def save_audio_files(self):
         """
         Guarda archivos de audio WAV
@@ -530,7 +674,7 @@ class FMModulationExperiment:
         """
         print("🔄 Ejecutando experimento completo de modulación/demodulación FM...")
         print("1️⃣  Generando señal de mensaje...")
-        self.generate_message_signal()
+        self.generate_message_signal(frequency=440)  # <- Cambiado: ahora genera un solo seno
         print("2️⃣  Modulando señal mensaje a FM...")
         self.fm_modulate()
         print("3️⃣  Analizando espectro de la señal FM modulada...")
@@ -548,9 +692,10 @@ class FMModulationExperiment:
         self.plot_time_domain()
         self.plot_frequency_domain()
         self.plot_spectral_identification()
-        self.plot_mag_phase_fft_like()     # magnitud/fase crudas como fft.py
-        # Eliminado: gráfica de fase diferencial
-        # self.plot_phase_diff_fft_like()
+        
+        # Gráficas de comparación magnitud/fase (fft.py-like)
+        self.plot_mag_phase_fft_like_aligned(fmax_view=3000.0, rel_thr=0.01)  # fase alineada
+        self.plot_mag_phase_fft_like_clean(fmax_view=2000.0, mag_threshold_rel=0.02)  # solo picos
 
         self.save_audio_files()
         self.print_summary()
@@ -559,7 +704,8 @@ class FMModulationExperiment:
         print("     - fm2_time_domain_signals.png")
         print("     - fm2_frequency_domain_spectra.png")
         print("     - fm2_spectral_identification.png")
-        print("     - fm2_mag_phase_fft_like.png")
+        print("     - fm2_mag_phase_fft_like_aligned.png")
+        print("     - fm2_mag_phase_clean.png")
         print("  🎵 Audios:")
         print("     - fm2_mensaje_original.wav")
         print("     - fm2_señal_modulada.wav")

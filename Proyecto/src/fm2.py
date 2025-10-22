@@ -65,7 +65,7 @@ class FMModulationExperiment:
         peak = np.max(np.abs(self.message)) + 1e-12
         self.message = self.message / peak
         
-        print(f"   ✓ Señal senoidal generada: {frequency} Hz")
+        print(f"Señal senoidal generada: {frequency} Hz")
         return self.message
     
     def fm_modulate(self):
@@ -108,9 +108,9 @@ class FMModulationExperiment:
         self.global_peak_freq = float(global_peak_freq)
         self.carrier_freq_observed = float(carrier_freq_near)
 
-        print(f"📡 Pico global en: {global_peak_freq:.2f} Hz")
-        print(f"📡 Portadora teórica: {self.fc:.2f} Hz")
-        print(f"📡 Pico cercano a f_c: {carrier_freq_near:.2f} Hz")
+        print(f"Pico global en: {global_peak_freq:.2f} Hz")
+        print(f"Portadora teórica: {self.fc:.2f} Hz")
+        print(f"Pico cercano a f_c: {carrier_freq_near:.2f} Hz")
         
         return freq, magnitude, carrier_freq_near
     
@@ -161,7 +161,7 @@ class FMModulationExperiment:
         if lowcut >= highcut:
             raise ValueError("Rango de filtro inválido después del cálculo de bandwidth.")
         
-        print(f"📻 Sintonizando señal FM:")
+        print(f"Sintonizando señal FM:")
         print(f"   - Frecuencia portadora: {self.fc:.0f} Hz")
         print(f"   - Ancho de banda: {bandwidth:.0f} Hz")
         print(f"   - Rango del filtro: {lowcut:.0f} Hz - {highcut:.0f} Hz")
@@ -578,7 +578,7 @@ class FMModulationExperiment:
         wavfile.write(f'{self.output_dir}/fm2_señal_modulada.wav', self.fs, fm_audio)
         wavfile.write(f'{self.output_dir}/fm2_mensaje_demodulado.wav', self.fs, demodulated_audio)
         
-        print(f"\n✅ Archivos de audio guardados en: {self.output_dir}/")
+        print(f"\n Archivos de audio guardados en: {self.output_dir}/")
         print(f"   - fm2_mensaje_original.wav")
         print(f"   - fm2_señal_modulada.wav")
         print(f"   - fm2_mensaje_demodulado.wav")
@@ -592,11 +592,11 @@ class FMModulationExperiment:
         if self.fm_max_est is not None:
             print(f"fmax estimada (mensaje):         {self.fm_max_est:.2f} Hz")
         if self.delta_f is not None:
-            print(f"Desviación máx. Δf ≈ kf·|m|max:   {self.delta_f:.2f} Hz")
+            print(f"Desviación máx. delta f aprox kf·|m|max:   {self.delta_f:.2f} Hz")
         if self.bandwidth_used is not None:
             print(f"BW usado (Carson):               {self.bandwidth_used:.2f} Hz")
         if self.lowcut is not None and self.highcut is not None:
-            print(f"Filtro pasa-banda:               {self.lowcut:.2f} Hz  →  {self.highcut:.2f} Hz")
+            print(f"Filtro pasa-banda:               {self.lowcut:.2f} Hz  ->  {self.highcut:.2f} Hz")
         if self.demod_lpf_cutoff is not None:
             print(f"LPF demodulación (cutoff):       {self.demod_lpf_cutoff:.2f} Hz")
         print("---------------------------------------------------------\n")
@@ -644,7 +644,7 @@ class FMModulationExperiment:
 
         print("\n---- Fase vs Frecuencia (fft.py-like, fase cruda filtrada) ----")
         print(f"Rango: 0–{fmax_view:.0f} Hz | picos listados: {take} | umbral rel: {rel_thr:.3f}")
-        print("f(Hz)       |   |Ymsg|        |Ydem|        φ_msg(rad)     φ_dem(rad)     Δφ env.(rad)   Δφ(deg)")
+        print("f(Hz)       |   |Ymsg|        |Ydem|        msg(rad)     dem(rad)     env.(rad)  (deg)")
         print("------------+---------------------------------------------------------------------------------------")
 
         dphis = []
@@ -662,9 +662,9 @@ class FMModulationExperiment:
         mean_deg = float(np.degrees(np.angle(np.mean(np.exp(1j*dphis)))) )  # media circular
         std_deg = float(np.degrees(np.sqrt(np.mean(np.angle(np.exp(1j*(dphis - np.angle(np.mean(np.exp(1j*dphis))))))**2 + 1e-12))))
         print("----------------------------------------------------------------------------------------------------")
-        print(f"Resumen Δφ: media ≈ {mean_deg:.2f}° | dispersión ≈ {std_deg:.2f}°")
+        print(f"Resumen: media aprox {mean_deg:.2f}° | dispersión aprox {std_deg:.2f}°")
         if abs(abs(mean_deg) - 180.0) < 15.0:
-            print("Nota: Δφ ≈ 180° sugiere inversión de signo (señal demodulada invertida).")
+            print("Nota:  aprox 180° sugiere inversión de signo (señal demodulada invertida).")
         print("----------------------------------------------------------------------------------------------------\n")
     
     def run_complete_experiment(self):
@@ -672,23 +672,23 @@ class FMModulationExperiment:
         Ejecuta el experimento completo: generación, modulación, análisis espectral,
         sintonización, demodulación y visualización de resultados.
         """
-        print("🔄 Ejecutando experimento completo de modulación/demodulación FM...")
-        print("1️⃣  Generando señal de mensaje...")
+        print(" Ejecutando experimento completo de modulación/demodulación FM...")
+        print("1  Generando señal de mensaje...")
         self.generate_message_signal(frequency=440)  # <- Cambiado: ahora genera un solo seno
-        print("2️⃣  Modulando señal mensaje a FM...")
+        print("2  Modulando señal mensaje a FM...")
         self.fm_modulate()
-        print("3️⃣  Analizando espectro de la señal FM modulada...")
+        print("3  Analizando espectro de la señal FM modulada...")
         self.compute_fft(self.fm_signal)
-        print("4️⃣  Sintonizando señal FM (filtrado pasa-banda)...")
+        print("4  Sintonizando señal FM (filtrado pasa-banda)...")
         self.tune_signal()
-        print("5️⃣  Demodulando señal FM...")
+        print("5  Demodulando señal FM...")
         self.fm_demodulate_fft()
 
         # Imprimir tablas de fase antes de abrir ventanas de matplotlib
-        print("\n8️⃣  Imprimiendo espectro de fase vs frecuencia (fft.py-like)...")
+        print("\n8  Imprimiendo espectro de fase vs frecuencia (fft.py-like)...")
         self.print_phase_spectrum(fmax_view=3000.0, top_n=8)
 
-        print("\n6️⃣  Generando visualizaciones...")
+        print("\n6  Generando visualizaciones...")
         self.plot_time_domain()
         self.plot_frequency_domain()
         self.plot_spectral_identification()
@@ -700,17 +700,17 @@ class FMModulationExperiment:
         self.save_audio_files()
         self.print_summary()
 
-        print("  📊 Gráficas:")
+        print("  Gráficas:")
         print("     - fm2_time_domain_signals.png")
         print("     - fm2_frequency_domain_spectra.png")
         print("     - fm2_spectral_identification.png")
         print("     - fm2_mag_phase_fft_like_aligned.png")
         print("     - fm2_mag_phase_clean.png")
-        print("  🎵 Audios:")
+        print("  Audios:")
         print("     - fm2_mensaje_original.wav")
         print("     - fm2_señal_modulada.wav")
         print("     - fm2_mensaje_demodulado.wav")
-        print("\n✅ Experimento completo.")
+        print("\n Experimento completo.")
 
 # Agregar bloque de ejecución directa
 if __name__ == "__main__":

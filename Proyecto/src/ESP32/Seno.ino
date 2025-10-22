@@ -1,6 +1,6 @@
 // --- Configuración de la Señal ---
 #define DAC_PIN 25                // Pin de salida de audio. Puedes usar GPIO 25 o 26.
-#define SINE_FREQ 0.1           // Frecuencia de la señal piloto en Hz. ¡Puedes cambiarla!
+#define SINE_FREQ 1500           // Frecuencia de la señal piloto en Hz. ¡Puedes cambiarla!
 #define SINE_TABLE_SIZE 256       // Tamaño de la tabla de consulta. 256 es un buen valor.
 
 

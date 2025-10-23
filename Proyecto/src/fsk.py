@@ -7,19 +7,20 @@ import soundfile as sf
 import os
 
 class FSK:
-    def __init__(self, SAMPLE_RATE=44100, duration=2.0, carpeta_salida='SENfsk'):
+    def __init__(self, SAMPLE_RATE=8000, duration=2.0, carpeta_salida='SENfsk'):
         """
         Clase para modulación y demodulación FSK (Frequency Shift Keying).
-        
-        Parámetros:
-            SAMPLE_RATE: Frecuencia de muestreo en Hz (default: 44100)
-            duration: Duración de la señal en segundos (default: 2.0)
-            carpeta_salida: Carpeta donde se guardarán los archivos de audio (default: 'SENfsk')
         """
         self.SAMPLE_RATE = SAMPLE_RATE
-        self.duration = duration
+        self.duration = duration  # duración para señal original (portadora)
         self.t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False)
         self.carpeta_salida = carpeta_salida
+        
+        # Nuevos: tiempos y duraciones separadas
+        self.duration_fsk = 0.0
+        self.t_fsk = np.array([], dtype=float)
+        self.duration_dem = 0.0
+        self.t_dem = np.array([], dtype=float)
         
         # Crear la carpeta si no existe
         if not os.path.exists(carpeta_salida):
@@ -50,23 +51,21 @@ class FSK:
     
     def generar_tono_original(self, frecuencia=1000, amplitud=0.8):
         """
-        Genera un tono senoidal puro (señal original).
-        
-        Parámetros:
-            frecuencia: Frecuencia del tono en Hz (default: 1000)
-            amplitud: Amplitud de la señal (default: 0.8)
-        
-        Retorna:
-            Señal senoidal
+        Genera un tono senoidal original de frecuencia específica.
+        Usa self.duration (no lo modifica).
         """
-        self.frecuencia_original = frecuencia  # Guardar para demodulación
+        # Guardar frecuencia para referencia
+        self.frecuencia_original = frecuencia
+        
+        # Generar tono con la duración original (2s)
         self.senal_original = amplitud * np.sin(2 * np.pi * frecuencia * self.t)
         
-        # Guardar el archivo
-        archivo_salida = os.path.join(self.carpeta_salida, 'seno_original.wav')
+        # Guardar archivo WAV
+        archivo_salida = os.path.join(self.carpeta_salida, 'senal_original.wav')
         sf.write(archivo_salida, self.senal_original, self.SAMPLE_RATE)
-        print(f"Tono original guardado en: {archivo_salida}")
         
+        print(f"Tono original generado: {frecuencia}Hz | Duración: {self.duration}s")
+        print(f"Señal original guardada en: {archivo_salida}")
         return self.senal_original
     
     def mostrar_senal_original(self):
@@ -136,55 +135,40 @@ class FSK:
         plt.tight_layout()
         plt.show()
     
-    def modular_fsk(self, f0=1000, f1=2000, bits_per_second=8, amplitud=1.0):
+    def modular_fsk(self, f0=1000, f1=2000, bits_per_second=125, amplitud=1.0):
         """
         Modula los datos binarios usando FSK.
-        
-        Parámetros:
-            f0: Frecuencia para el bit '0' en Hz (default: 1000)
-            f1: Frecuencia para el bit '1' en Hz (default: 2000)
-            bits_per_second: Tasa de bits por segundo (default: 8)
-            amplitud: Amplitud de la señal (default: 1.0)
-        
-        Retorna:
-            Señal FSK modulada
+        Genera señal del largo exacto necesario para los bits (sin padding).
         """
         self.f0 = f0
         self.f1 = f1
         self.bits_per_second = bits_per_second
-        
-        # Duración de cada bit
-        bit_duration = 1.0 / bits_per_second
-        samples_per_bit = int(self.SAMPLE_RATE * bit_duration)
-        
-        # Generar señal modulada
-        senal_fsk = np.array([])
-        
+
+        # Duración y muestras por bit (forza coherencia con Fs/bps)
+        samples_per_bit = int(round(self.SAMPLE_RATE / bits_per_second))
+        bit_duration = samples_per_bit / float(self.SAMPLE_RATE)
+
+        # Generar señal modulada sin padding de ceros
+        bloques = []
         for bit in self.datos:
             t_bit = np.linspace(0, bit_duration, samples_per_bit, endpoint=False)
-            if bit == 0:
-                senal_bit = amplitud * np.sin(2 * np.pi * f0 * t_bit)
-            else:
-                senal_bit = amplitud * np.sin(2 * np.pi * f1 * t_bit)
-            
-            senal_fsk = np.concatenate([senal_fsk, senal_bit])
-        
-        # Ajustar longitud si es necesario
-        if len(senal_fsk) < len(self.t):
-            # Rellenar con ceros
-            senal_fsk = np.concatenate([senal_fsk, np.zeros(len(self.t) - len(senal_fsk))])
-        else:
-            senal_fsk = senal_fsk[:len(self.t)]
-        
+            senal_bit = amplitud * np.sin(2 * np.pi * (f1 if bit == 1 else f0) * t_bit)
+            bloques.append(senal_bit)
+        senal_fsk = np.concatenate(bloques) if bloques else np.array([], dtype=float)
+
+        # Ajustar duración y eje de tiempo de la señal modulada (NO tocar self.duration ni self.t)
         self.senal_fsk = senal_fsk
-        print(f"Señal FSK modulada: f0={f0}Hz (bit '0'), f1={f1}Hz (bit '1')")
-        
-        # Guardar el archivo
+        self.duration_fsk = len(self.senal_fsk) / float(self.SAMPLE_RATE)
+        self.t_fsk = np.arange(len(self.senal_fsk)) / float(self.SAMPLE_RATE)
+
+        print(f"Señal FSK modulada: f0={f0}Hz (0), f1={f1}Hz (1) | "
+              f"sps={samples_per_bit} | bits={len(self.datos)} | dur={self.duration_fsk:.4f}s")
+
+        # Guardar el archivo exacto (sin relleno)
         archivo_salida = os.path.join(self.carpeta_salida, 'fsk_modulado.wav')
         sf.write(archivo_salida, self.senal_fsk, self.SAMPLE_RATE)
         print(f"Señal modulada guardada en: {archivo_salida}")
-        
-        return senal_fsk
+        return self.senal_fsk
     
     def mostrar_senal_modulada(self):
         """Muestra análisis completo de la señal FSK modulada."""
@@ -458,41 +442,39 @@ class FSK:
     
     def reconstruir_senal_demodulada(self):
         """
-        Reconstruye la señal de audio a partir de los datos demodulados.
-        Reconstruye el tono original continuo.
+        Reconstruye la señal portadora a partir de los bits demodulados.
+        Usa la frecuencia de la portadora original (f0), no el promedio.
         """
-        # Si tenemos la frecuencia original guardada, usarla
-        if hasattr(self, 'frecuencia_original'):
-            frecuencia = self.frecuencia_original
-        else:
-            # Si no, usar la frecuencia central entre f0 y f1
-            frecuencia = (self.f0 + self.f1) / 2
-        
-        # Generar tono continuo demodulado
-        self.senal_demodulada = 0.8 * np.sin(2 * np.pi * frecuencia * self.t)
-        
-        # Guardar el archivo
+        if not hasattr(self, 'datos_recuperados') or self.datos_recuperados is None or len(self.datos_recuperados) == 0:
+            print("Error: No hay bits demodulados. Ejecuta demodular_fsk primero.")
+            return None
+
+        # Usar frecuencia de la portadora base (f0=1000 Hz), NO el promedio
+        frecuencia = self.f0
+        print(f"\nReconstruyendo señal demodulada con frecuencia portadora: {frecuencia:.2f} Hz")
+
+        # Generar tono continuo demodulado con el mismo largo que la FSK
+        self.duration_dem = self.duration_fsk
+        self.t_dem = np.arange(len(self.senal_fsk)) / float(self.SAMPLE_RATE)
+        self.senal_demodulada = 0.8 * np.sin(2 * np.pi * frecuencia * self.t_dem)
+
+        # Guardar
         archivo_salida = os.path.join(self.carpeta_salida, 'fsk_demodulado.wav')
         sf.write(archivo_salida, self.senal_demodulada, self.SAMPLE_RATE)
         print(f"Señal demodulada guardada en: {archivo_salida}")
-        print(f"Frecuencia reconstruida: {frecuencia} Hz")
+        return self.senal_demodulada
     
     def mostrar_senal_demodulada(self):
         """Muestra análisis completo de la señal demodulada."""
         fig = plt.figure(figsize=(15, 10))
-        
         # Señal demodulada en el tiempo (completa)
         plt.subplot(3, 2, 1)
-        plt.plot(self.t, self.senal_demodulada, 'm-', linewidth=1)
-        plt.title("Señal Demodulada - Vista Completa")
-        plt.xlabel("Tiempo (s)")
-        plt.ylabel("Amplitud")
-        plt.grid(True)
+        plt.plot(self.t_dem, self.senal_demodulada, 'm-', linewidth=1)  # <-- usar t_dem
         
         # Señal demodulada (zoom)
         plt.subplot(3, 2, 2)
-        mask = self.t <= 0.05
-        plt.plot(self.t[mask], self.senal_demodulada[mask], 'm-', linewidth=2)
+        mask = self.t_dem <= 0.05                                      # <-- usar t_dem
+        plt.plot(self.t_dem[mask], self.senal_demodulada[mask], 'm-', linewidth=2)
         plt.title("Señal Demodulada - Zoom (primeros 50ms)")
         plt.xlabel("Tiempo (s)")
         plt.ylabel("Amplitud")
@@ -549,10 +531,9 @@ class FSK:
     def comparar_senales(self):
         """Compara las tres señales: original, modulada y demodulada."""
         fig = plt.figure(figsize=(16, 12))
-        
         bit_duration = 1.0 / self.bits_per_second
-        t_senal = np.arange(len(self.senal_fsk)) / self.SAMPLE_RATE
-        
+        t_senal = self.t_fsk                                           # <-- tiempo FSK
+
         # Señales en el tiempo
         plt.subplot(4, 3, 1)
         plt.plot(self.t, self.senal_original, 'b-', linewidth=1, label='Original')
@@ -572,73 +553,44 @@ class FSK:
         plt.legend()
         
         plt.subplot(4, 3, 3)
-        plt.plot(self.t, self.senal_demodulada, 'm-', linewidth=1, label='Demodulada')
+        plt.plot(self.t_dem, self.senal_demodulada, 'm-', linewidth=1, label='Demodulada')
         plt.title("Señal Demodulada")
         plt.xlabel("Tiempo (s)")
         plt.ylabel("Amplitud")
         plt.grid(True)
         plt.legend()
         
-        # Zoom de las señales (primeros 50ms)
+        # Zoom (50 ms)
         zoom_time = 0.05
         mask_zoom = self.t <= zoom_time
         mask_zoom_fsk = t_senal <= zoom_time
-        
+        mask_zoom_dem = self.t_dem <= zoom_time
+
         plt.subplot(4, 3, 4)
         plt.plot(self.t[mask_zoom], self.senal_original[mask_zoom], 'b-', linewidth=2)
-        plt.title("Original - Zoom (50ms)")
-        plt.xlabel("Tiempo (s)")
-        plt.ylabel("Amplitud")
-        plt.grid(True)
-        
         plt.subplot(4, 3, 5)
         plt.plot(t_senal[mask_zoom_fsk], self.senal_fsk[mask_zoom_fsk], 'r-', linewidth=2)
-        plt.title("Modulada - Zoom (50ms)")
-        plt.xlabel("Tiempo (s)")
-        plt.ylabel("Amplitud")
-        plt.grid(True)
-        
         plt.subplot(4, 3, 6)
-        plt.plot(self.t[mask_zoom], self.senal_demodulada[mask_zoom], 'm-', linewidth=2)
-        plt.title("Demodulada - Zoom (50ms)")
-        plt.xlabel("Tiempo (s)")
-        plt.ylabel("Amplitud")
-        plt.grid(True)
-        
-        # Espectros de magnitud
-        N = len(self.senal_original)
+        plt.plot(self.t_dem[mask_zoom_dem], self.senal_demodulada[mask_zoom_dem], 'm-', linewidth=2)
+
+        # Espectros de magnitud (cada uno con su N)
+        N_orig = len(self.senal_original)
+        xf_orig = rfftfreq(N_orig, 1 / self.SAMPLE_RATE)
         yf_orig = rfft(self.senal_original)
+
+        N_mod = len(self.senal_fsk)
+        xf_mod = rfftfreq(N_mod, 1 / self.SAMPLE_RATE)
         yf_mod = rfft(self.senal_fsk)
-        yf_demod = rfft(self.senal_demodulada)
-        xf = rfftfreq(N, 1 / self.SAMPLE_RATE)
-        
-        plt.subplot(4, 3, 7)
-        plt.plot(xf, np.abs(yf_orig), 'b-', linewidth=1)
-        plt.title("Espectro Original")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Magnitud")
-        plt.grid(True)
-        plt.xlim(0, 3000)
-        
-        plt.subplot(4, 3, 8)
-        plt.plot(xf, np.abs(yf_mod), 'r-', linewidth=1)
-        plt.axvline(self.f0, color='b', linestyle='--', alpha=0.5)
-        plt.axvline(self.f1, color='g', linestyle='--', alpha=0.5)
-        plt.title("Espectro Modulado")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Magnitud")
-        plt.grid(True)
-        plt.xlim(0, 3000)
-        
-        plt.subplot(4, 3, 9)
-        plt.plot(xf, np.abs(yf_demod), 'm-', linewidth=1)
-        plt.title("Espectro Demodulado")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Magnitud")
-        plt.grid(True)
-        plt.xlim(0, 3000)
-        
-        # Espectrogramas
+
+        N_dem = len(self.senal_demodulada)
+        xf_dem = rfftfreq(N_dem, 1 / self.SAMPLE_RATE)
+        yf_dem = rfft(self.senal_demodulada)
+
+        plt.subplot(4, 3, 7);  plt.plot(xf_orig, np.abs(yf_orig), 'b-', linewidth=1);  plt.xlim(0, 3000)
+        plt.subplot(4, 3, 8);  plt.plot(xf_mod,  np.abs(yf_mod),  'r-', linewidth=1);  plt.axvline(self.f0, color='b', ls='--', alpha=0.5); plt.axvline(self.f1, color='g', ls='--', alpha=0.5); plt.xlim(0, 3000)
+        plt.subplot(4, 3, 9);  plt.plot(xf_dem,  np.abs(yf_dem),  'm-', linewidth=1);  plt.xlim(0, 3000)
+
+        # Espectrogramas (sin cambios)
         plt.subplot(4, 3, 10)
         plt.specgram(self.senal_original, NFFT=1024, Fs=self.SAMPLE_RATE, 
                      noverlap=512, cmap='viridis')
@@ -728,40 +680,48 @@ class FSK:
 
 # Ejemplo de uso
 if __name__ == "__main__":
-    # Crear instancia de FSK
-    fsk = FSK(SAMPLE_RATE=44100, duration=2.0, carpeta_salida='SENfsk')
-    
-    # Generar tono senoidal original
+    # Crear instancia de FSK equivalente al ESP32
+    fsk = FSK(SAMPLE_RATE=8000, duration=2.0, carpeta_salida='SENfsk')
+
+    # Generar tono senoidal original (coherente con F0)
     print("\n=== GENERANDO SEÑAL ORIGINAL ===")
     tono_original = fsk.generar_tono_original(frecuencia=1000, amplitud=0.8)
     fsk.mostrar_senal_original()
+
+    # Usar el mismo patrón del ESP32: {1, 0, 1, 1, 0, 1, 0, 0}
+    # Patrón base del ESP32 (Prueba.ino: data_bits)
+    patron_esp32 = [1, 0, 1, 1, 0, 1, 0, 0]
     
-    # Generar datos binarios
-    datos = [0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1]
-    fsk.generar_datos_binarios(datos=datos)
+    # Repetir para llenar ~2 segundos (2s * 125 bps = 250 bits)
+    num_repeticiones = (250 // len(patron_esp32)) + 1
+    datos_extendidos = (patron_esp32 * num_repeticiones)[:250]
     
-    # Modular en FSK
+    print(f"\nPatron ESP32 (8 bits): {patron_esp32}")
+    print(f"Repetido {num_repeticiones} veces para 250 bits (2s a 125 bps)")
+    
+    fsk.generar_datos_binarios(datos=datos_extendidos)
+
+    # Modular en FSK con los mismos parámetros del micro
     print("\n=== MODULANDO SEÑAL FSK ===")
-    senal_modulada = fsk.modular_fsk(f0=1000, f1=2000, bits_per_second=8, amplitud=0.8)
+    senal_modulada = fsk.modular_fsk(f0=1000, f1=2000, bits_per_second=125, amplitud=0.8)
     fsk.mostrar_senal_modulada()
-    
-    # Mostrar señales en el tiempo
-    fsk.mostrar_senales()
-    
-    # Demodular
+
+    # Demodular la señal FSK
     print("\n=== DEMODULANDO SEÑAL FSK ===")
     datos_recuperados = fsk.demodular_fsk(metodo='filtro')
     fsk.mostrar_senal_demodulada()
-    
-    # Mostrar señales con datos recuperados
-    fsk.mostrar_senales()
-    
-    # Comparación completa
-    print("\n=== COMPARACIÓN DE SEÑALES ===")
+
+    # Comparar señales
+    print("\n=== COMPARACION DE SEÑALES ===")
     fsk.comparar_senales()
-    
-    print("\n=== Archivos generados en la carpeta 'SENfsk' ===")
-    print("1. seno_original.wav - Tono senoidal puro")
-    print("2. fsk_modulado.wav - Señal FSK modulada")
-    print("3. fsk_demodulado.wav - Señal FSK demodulada")
-    print("\nDemo FSK completada.")
+
+    # Verificar que los primeros 8 bits coincidan con el ESP32
+    print("\n*** VERIFICACION vs ESP32 ***")
+    print(f"Patron ESP32:        {patron_esp32}")
+    print(f"Python (primeros 8): {datos_extendidos[:8]}")
+    if datos_extendidos[:8] == patron_esp32:
+        print("[OK] Los datos coinciden con el ESP32")
+    else:
+        print("[ERROR] Los datos NO coinciden")
+
+    plt.show()

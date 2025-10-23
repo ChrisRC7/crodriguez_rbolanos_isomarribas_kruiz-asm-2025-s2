@@ -53,7 +53,7 @@ class MainApp:
         subtitulo.pack()
         
         # Frame para los botones
-        frame_botones = tk.Frame(self.root, bg='#2c3e50')
+        frame_botones = tk.Frame(self.root, bg="#2c3f52")
         frame_botones.pack(pady=40)
         
         # Botón Pregunta 2 (FFT)
@@ -176,7 +176,7 @@ class MainApp:
             print("Calculando FFT...")
             fft.FFT(normalized_tone, SAMPLE_RATE)
             
-            print("✓ Análisis completado exitosamente")
+            print("Análisis completado exitosamente")
             messagebox.showinfo("Éxito", "Análisis FFT completado. Las gráficas se han mostrado.")
             
         except Exception as e:

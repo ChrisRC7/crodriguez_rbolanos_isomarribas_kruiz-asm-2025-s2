@@ -1,5 +1,5 @@
 """
-Main.py - Sistema de Análisis FFT y Modulación/Demodulación
+Main.py - Sistema de Análisis FFT y Modulación FSK
 Menú principal con interfaz gráfica para acceder a las diferentes funcionalidades
 """
 
@@ -17,8 +17,8 @@ class MainApp:
         # Crear ventana principal
         self.root = tk.Tk()
         self.root.title("Sistema de Procesamiento Digital de Señales")
-        self.root.geometry("1000x500")
-        self.root.minsize(1000, 500)  # asegura ancho suficiente para 3 botones
+        self.root.geometry("800x500")
+        self.root.minsize(800, 500)
         self.root.resizable(False, False)
         
         # Configurar estilo
@@ -44,7 +44,7 @@ class MainApp:
         # Subtítulo
         subtitulo = tk.Label(
             self.root,
-            text="Tarea 1: FFT y Sistemas de Modulación",
+            text="Análisis FFT y Modulación FSK",
             font=("Helvetica", 12),
             bg='#2c3e50',
             fg='#ecf0f1',
@@ -59,7 +59,7 @@ class MainApp:
         # Botón Pregunta 2 (FFT)
         btn_pregunta2 = tk.Button(
             frame_botones,
-            text="Pregunta 2\nAnálisis FFT de Audio",
+            text="Análisis FFT\nde Audio",
             command=self.ejecutar_pregunta2,
             font=("Helvetica", 14, "bold"),
             bg='#3498db',
@@ -72,13 +72,13 @@ class MainApp:
             bd=3,
             cursor="hand2"
         )
-        btn_pregunta2.grid(row=0, column=0, padx=20)
+        btn_pregunta2.grid(row=0, column=0, padx=30)
         
-        # Botón Pregunta 5 (Modulación y Demodulación)
-        btn_pregunta5 = tk.Button(
+        # Botón FSK
+        btn_fsk = tk.Button(
             frame_botones,
-            text="Pregunta 5\nModulación y Demodulación",
-            command=self.ejecutar_pregunta5,
+            text="Modulación FSK\n(Frequency Shift Keying)",
+            command=self.ejecutar_fsk,
             font=("Helvetica", 14, "bold"),
             bg='#e74c3c',
             fg='white',
@@ -90,25 +90,7 @@ class MainApp:
             bd=3,
             cursor="hand2"
         )
-        btn_pregunta5.grid(row=0, column=1, padx=20)
-
-        # Nuevo botón: Análisis FM (ejecuta fm2.py)
-        btn_analisis_fm = tk.Button(
-            frame_botones,
-            text="Análisis FM\nFM con FFT",
-            command=self.ejecutar_analisis_fm,
-            font=("Helvetica", 14, "bold"),
-            bg='#27ae60',
-            fg='white',
-            activebackground='#1e8449',
-            activeforeground='white',
-            width=20,
-            height=4,
-            relief=tk.RAISED,
-            bd=3,
-            cursor="hand2"
-        )
-        btn_analisis_fm.grid(row=0, column=2, padx=20)
+        btn_fsk.grid(row=0, column=1, padx=30)
         
         # Descripción de funcionalidades
         frame_descripciones = tk.Frame(self.root, bg='#2c3e50')
@@ -116,34 +98,23 @@ class MainApp:
         
         desc_pregunta2 = tk.Label(
             frame_descripciones,
-            text="• Carga un archivo WAV\n• Muestra espectro de magnitud y fase",
+            text="• Carga un archivo WAV\n• Muestra espectro de magnitud y fase\n• Análisis FFT completo",
             font=("Helvetica", 10),
             bg='#2c3e50',
             fg='#bdc3c7',
             justify=tk.LEFT
         )
-        desc_pregunta2.grid(row=0, column=0, padx=30)
+        desc_pregunta2.grid(row=0, column=0, padx=40)
         
-        desc_pregunta5 = tk.Label(
+        desc_fsk = tk.Label(
             frame_descripciones,
-            text="• Genera señales con FSK\n• Filtra ruido",
+            text="• Genera señal senoidal\n• Modula en FSK\n• Demodula y compara señales",
             font=("Helvetica", 10),
             bg='#2c3e50',
             fg='#bdc3c7',
             justify=tk.LEFT
         )
-        desc_pregunta5.grid(row=0, column=1, padx=30)
-
-        # Descripción para Análisis FM
-        desc_analisis_fm = tk.Label(
-            frame_descripciones,
-            text="• Modulación FM\n• Demodulación por FFT (Hilbert)",
-            font=("Helvetica", 10),
-            bg='#2c3e50',
-            fg='#bdc3c7',
-            justify=tk.LEFT
-        )
-        desc_analisis_fm.grid(row=0, column=2, padx=30)
+        desc_fsk.grid(row=0, column=1, padx=40)
         
         # Botón Salir
         btn_salir = tk.Button(
@@ -173,7 +144,7 @@ class MainApp:
     def ejecutar_pregunta2(self):
         """Ejecuta la funcionalidad de la Pregunta 2 (Análisis FFT)"""
         print("\n" + "="*60)
-        print("PREGUNTA 2: ANÁLISIS FFT DE AUDIO")
+        print("ANÁLISIS FFT DE AUDIO")
         print("="*60)
         
         # Abrir explorador de archivos
@@ -212,36 +183,36 @@ class MainApp:
             print(f"Error al procesar el archivo: {e}")
             messagebox.showerror("Error", f"No se pudo procesar el archivo:\n{e}")
     
-    def ejecutar_pregunta5(self):
-        """Ejecuta la funcionalidad de la Pregunta 5 (Modulación y Demodulación)"""
+    def ejecutar_fsk(self):
+        """Ejecuta la funcionalidad de Modulación FSK"""
         print("\n" + "="*60)
-        print("PREGUNTA 5: MODULACIÓN Y DEMODULACIÓN")
+        print("MODULACIÓN FSK (FREQUENCY SHIFT KEYING)")
         print("="*60)
         
         try:
             # Obtener el directorio donde está main.py
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            pregunta5_path = os.path.join(script_dir, "pregunta5.py")
+            fsk_path = os.path.join(script_dir, "FSK.py")
             
-            # Verificar si existe el archivo pregunta5.py
-            if not os.path.exists(pregunta5_path):
+            # Verificar si existe el archivo FSK.py
+            if not os.path.exists(fsk_path):
                 print(f"Directorio del script: {script_dir}")
-                print(f"Buscando: {pregunta5_path}")
+                print(f"Buscando: {fsk_path}")
                 print(f"Archivos en el directorio: {os.listdir(script_dir)}")
                 messagebox.showerror(
                     "Error", 
-                    f"No se encontró el archivo 'pregunta5.py'.\n\n"
+                    f"No se encontró el archivo 'FSK.py'.\n\n"
                     f"Directorio actual:\n{script_dir}\n\n"
-                    f"Asegúrate de que 'pregunta5.py' esté en el mismo directorio que main.py"
+                    f"Asegúrate de que 'FSK.py' esté en el mismo directorio que main.py"
                 )
                 return
             
-            print("Ejecutando pregunta5.py...")
-            print("Se abrirán diálogos para seleccionar opciones.\n")
+            print("Ejecutando FSK.py...")
+            print("Se generarán señales y gráficas de análisis FSK.\n")
             
-            # Ejecutar pregunta5.py como subproceso desde el directorio correcto
+            # Ejecutar FSK.py como subproceso desde el directorio correcto
             resultado = subprocess.run(
-                [sys.executable, pregunta5_path],
+                [sys.executable, fsk_path],
                 capture_output=True,
                 text=True,
                 cwd=script_dir  # Ejecutar desde el directorio del script
@@ -255,66 +226,24 @@ class MainApp:
                 print("Errores:", resultado.stderr)
             
             if resultado.returncode == 0:
-                print("✓ Proceso completado exitosamente")
+                print(" Proceso completado exitosamente")
                 messagebox.showinfo(
                     "Éxito",
-                    "Modulación y demodulación completadas.\n"
-                    "Revisa la carpeta 'audio_output' para los archivos generados."
+                    "Modulación FSK completada.\n"
+                    "Revisa la carpeta 'SENfsk' para los archivos de audio generados:\n\n"
+                    "• seno_original.wav\n"
+                    "• fsk_modulado.wav\n"
+                    "• fsk_demodulado.wav"
                 )
             else:
                 messagebox.showerror(
                     "Error",
-                    f"Hubo un error al ejecutar pregunta5.py\n"
+                    f"Hubo un error al ejecutar FSK.py\n"
                     f"Código de retorno: {resultado.returncode}"
                 )
                 
         except Exception as e:
-            print(f"Error al ejecutar pregunta5.py: {e}")
-            messagebox.showerror("Error", f"No se pudo ejecutar el proceso:\n{e}")
-    
-    def ejecutar_analisis_fm(self):
-        """Ejecuta el análisis FM (modulación/demodulación con FFT) usando fm2.py"""
-        print("\n" + "="*60)
-        print("ANÁLISIS FM: MODULACIÓN/DEMODULACIÓN CON FFT")
-        print("="*60)
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            fm2_path = os.path.join(script_dir, "fm2.py")
-
-            if not os.path.exists(fm2_path):
-                print(f"No se encontró fm2.py en: {script_dir}")
-                messagebox.showerror(
-                    "Error",
-                    "No se encontró 'fm2.py'. Asegúrate de que esté en el mismo directorio que main.py"
-                )
-                return
-
-            print("Ejecutando fm2.py...\n")
-            resultado = subprocess.run(
-                [sys.executable, fm2_path],
-                capture_output=True,
-                text=True,
-                cwd=script_dir
-            )
-
-            if resultado.stdout:
-                print(resultado.stdout)
-            if resultado.stderr:
-                print("Errores:", resultado.stderr)
-
-            if resultado.returncode == 0:
-                print("✓ Proceso completado exitosamente")
-                messagebox.showinfo(
-                    "Éxito",
-                    "Análisis FM completado.\nRevisa la carpeta 'out_FM' en la raíz del proyecto."
-                )
-            else:
-                messagebox.showerror(
-                    "Error",
-                    f"Hubo un error al ejecutar fm2.py\nCódigo de retorno: {resultado.returncode}"
-                )
-        except Exception as e:
-            print(f"Error al ejecutar fm2.py: {e}")
+            print(f"Error al ejecutar FSK.py: {e}")
             messagebox.showerror("Error", f"No se pudo ejecutar el proceso:\n{e}")
     
     def salir(self):
@@ -335,7 +264,7 @@ class MainApp:
 if __name__ == "__main__":
     print("="*60)
     print("SISTEMA DE PROCESAMIENTO DIGITAL DE SEÑALES")
-    print("Tarea 1: FFT y Sistemas de Modulación")
+    print("Análisis FFT y Modulación FSK")
     print("="*60)
     print("\nIniciando interfaz gráfica...")
     

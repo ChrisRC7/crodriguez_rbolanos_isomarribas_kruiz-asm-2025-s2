@@ -299,8 +299,8 @@ void loop() {
         // Comparación compacta de mensajes (solo el subconjunto presente en el frame)
         Serial.println("\nCOMPARACIÓN DEL MENSAJE (subset en frame):");
         printBitsLine("Original (bits)", data_bits, total_symbols);
-        printHzLine("Modulado (Hz)   ", data_bits, total_symbols);
-        printBitsLine("Demod (bits)    ", demod_bits, total_symbols);
+        printHzLine("Modulado (Hz)  ", data_bits, total_symbols);
+        printBitsLine("Demod (bits)   ", demod_bits, total_symbols);
 
         Serial.printf("\nResolución frame: %.2f Hz/bin | Resolución símbolo: %.2f Hz/bin\n\n",
                       (float)SAMPLING_FREQ/SAMPLES, (float)SAMPLING_FREQ/SYM_FFT_N);

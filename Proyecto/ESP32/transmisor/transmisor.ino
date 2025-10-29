@@ -1,0 +1,79 @@
+/**
+ * @file pico_transmisor_checksum.ino
+ * @brief Transmisor FSK que envía un paquete de 12 bits con un checksum XOR personalizado.
+ */
+
+// --- Configuración de Pines ---
+const int FSK_PIN = 15; // GP15 para Pico, puede ser el pin 9 para Arduino
+
+// --- Parámetros FSK ---
+const int FREQ_0 = 1000;
+const int FREQ_1 = 2000;
+const long BIT_DURATION_US = 8000; // 8 ms
+
+// --- Componentes del Mensaje ---
+const uint8_t data_message[4] = {1, 1, 0, 0};
+const uint8_t confirmation_bits[4] = {1, 0, 1, 0}; // Patrón de confirmación fijo
+const int MESSAGE_LEN = 4;
+
+// --- Paquete de Transmisión Completo (12 bits) ---
+const int PACKET_LEN = 12;
+uint8_t transmission_packet[PACKET_LEN];
+
+// --- Temporización (para transmisión continua) ---
+const long HALF_PERIOD_0_US = 1000000 / (2 * FREQ_0);
+const long HALF_PERIOD_1_US = 1000000 / (2 * FREQ_1);
+int current_bit_index = 0;
+unsigned long bit_start_time_us = 0;
+unsigned long next_toggle_time_us = 0;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(FSK_PIN, OUTPUT);
+  digitalWrite(FSK_PIN, LOW);
+  delay(1000);
+
+  // --- Construir el paquete de transmisión de 12 bits ---
+  uint8_t checksum_bits[MESSAGE_LEN];
+
+  // 1. Calcular el checksum (XOR entre el mensaje y los bits de confirmación)
+  for (int i = 0; i < MESSAGE_LEN; i++) {
+    checksum_bits[i] = data_message[i] ^ confirmation_bits[i];
+  }
+  
+  // 2. Ensamblar el paquete completo
+  for (int i = 0; i < MESSAGE_LEN; i++) {
+    transmission_packet[i] = data_message[i];                   // Primeros 4: Mensaje
+    transmission_packet[i + MESSAGE_LEN] = confirmation_bits[i];  // Siguientes 4: Confirmación
+    transmission_packet[i + 2 * MESSAGE_LEN] = checksum_bits[i];    // Últimos 4: Checksum
+  }
+  
+  Serial.println("Transmisor FSK con Checksum Personalizado iniciado...");
+  Serial.print("Paquete completo a transmitir (12 bits): ");
+  for(int i=0; i < PACKET_LEN; i++) Serial.print(transmission_packet[i]);
+  Serial.println();
+}
+
+void loop() {
+  unsigned long current_time_us = micros();
+
+  if (bit_start_time_us == 0) {
+    bit_start_time_us = current_time_us;
+    next_toggle_time_us = current_time_us;
+  }
+
+  if (current_time_us >= next_toggle_time_us) {
+    digitalWrite(FSK_PIN, !digitalRead(FSK_PIN));
+    long half_period = (transmission_packet[current_bit_index] == 1) ? HALF_PERIOD_1_US : HALF_PERIOD_0_US;
+    next_toggle_time_us += half_period;
+  }
+  
+  if (current_time_us - bit_start_time_us >= BIT_DURATION_US) {
+    current_bit_index++;
+    bit_start_time_us = 0;
+    
+    if (current_bit_index >= PACKET_LEN) {
+      current_bit_index = 0;
+    }
+  }
+}

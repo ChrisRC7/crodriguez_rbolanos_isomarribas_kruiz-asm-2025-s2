@@ -158,6 +158,7 @@ void loop() {
         vImag[i] = 0.0;
         next_t += SAMPLING_PERIOD_US;
       }
+      /*
         // Imprimir muestra de la señal cruda capturada (pin 34)
         Serial.println("=== Señal cruda del ADC (pin 34) ===");
         Serial.print("Primeras 64 muestras: ");
@@ -172,7 +173,7 @@ void loop() {
           if (i < SAMPLES - 1) Serial.print(",");
         }
         Serial.println();
-        Serial.println("====================================");
+        Serial.println("====================================");*/
       current_state = COMPUTING;
       break;
     }

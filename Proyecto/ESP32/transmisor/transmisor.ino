@@ -60,6 +60,13 @@ void loop() {
   if (bit_start_time_us == 0) {
     bit_start_time_us = current_time_us;
     next_toggle_time_us = current_time_us;
+    // Reportar la frecuencia activa al inicio de cada bit
+    int freq = (transmission_packet[current_bit_index] == 1) ? FREQ_1 : FREQ_0;
+    Serial.print("Bit ");
+    Serial.print(current_bit_index);
+    Serial.print(" → modulando a ");
+    Serial.print(freq);
+    Serial.println(" Hz");
   }
 
   if (current_time_us >= next_toggle_time_us) {

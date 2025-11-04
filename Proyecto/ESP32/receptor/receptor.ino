@@ -18,7 +18,7 @@
 // --- Parámetros FSK ---
 #define FREQ_0 1000
 #define FREQ_1 2000
-#define BIT_DURATION 128
+#define BIT_DURATION 88
 #define SYM_FFT_N 64
 
 // --- Configuración del Mensaje ---
@@ -36,11 +36,20 @@ double vReal[SAMPLES];
 double vImag[SAMPLES];
 ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLES, SAMPLING_FREQ);
 
-// --- Filtro Pasa Bajas IIR ---
-// Filtro de primer orden: y[n] = alpha * x[n] + (1 - alpha) * y[n-1]
-// Frecuencia de corte aprox. 3000 Hz (ajustable)
-const double FILTER_ALPHA = 0.6;  // Mayor valor = más respuesta, menor suavizado
-double filtered_sample = 0.0;     // Estado del filtro
+// --- Filtro Pasa Bajas IIR de Segundo Orden ---
+// Butterworth filter: y[n] = a0*x[n] + a1*x[n-1] + a2*x[n-2] - b1*y[n-1] - b2*y[n-2]
+// Diseñado para ~3000 Hz cutoff a 8kHz sampling
+const double FILTER_A0 = 0.1206;
+const double FILTER_A1 = 0.2412;
+const double FILTER_A2 = 0.1206;
+const double FILTER_B1 = 1.3695;
+const double FILTER_B2 = 0.5132;
+
+double filtered_sample = 0.0;
+double filtered_sample_z1 = 0.0;  // x[n-1]
+double filtered_sample_z2 = 0.0;  // x[n-2]
+double filtered_output_z1 = 0.0;  // y[n-1]
+double filtered_output_z2 = 0.0;  // y[n-2]
 
 // --- TFT ST7735 ---
 #define TFT_RST    22
@@ -49,9 +58,14 @@ double filtered_sample = 0.0;     // Estado del filtro
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 // --- Máquina de Estados ---
-enum State { WAITING_FOR_SIGNAL, SAMPLING, COMPUTING, DISPLAYING };
+enum State { WAITING_FOR_SIGNAL, SAMPLING, COMPUTING, DISPLAYING, CLEANUP, COOLDOWN };
 State current_state = WAITING_FOR_SIGNAL;
 const double SIGNAL_THRESHOLD = 200.0;
+unsigned long cleanup_start_time = 0;
+const unsigned long CLEANUP_DURATION_MS = 50;
+// Cooldown para evitar recibir el mismo mensaje múltiples veces
+unsigned long cooldown_start_time = 0;
+const unsigned long COOLDOWN_DURATION_MS = 2000;  // 2 segundos de espera antes de recibir otro mensaje
 
 // --- Funciones de Ayuda ---
 static void demodulateSymbolFFT(const double* in, int& bit_out) {
@@ -186,9 +200,21 @@ void loop() {
       for (int i = 0; i < SAMPLES; i++) {
         while (micros() < next_t) { /* esperar */ }
         double raw_sample = (double)analogRead(ADC_PIN);
-        // Aplicar filtro IIR pasa bajas
-        filtered_sample = FILTER_ALPHA * raw_sample + (1.0 - FILTER_ALPHA) * filtered_sample;
-        vReal[i] = filtered_sample;
+        
+        // Aplicar filtro IIR de segundo orden Butterworth
+        double filtered_out = FILTER_A0 * raw_sample + 
+                             FILTER_A1 * filtered_sample_z1 + 
+                             FILTER_A2 * filtered_sample_z2 - 
+                             FILTER_B1 * filtered_output_z1 - 
+                             FILTER_B2 * filtered_output_z2;
+        
+        // Actualizar estados
+        filtered_sample_z2 = filtered_sample_z1;
+        filtered_sample_z1 = raw_sample;
+        filtered_output_z2 = filtered_output_z1;
+        filtered_output_z1 = filtered_out;
+        
+        vReal[i] = filtered_out;
         vImag[i] = 0.0;
         next_t += SAMPLING_PERIOD_US;
       }
@@ -212,16 +238,73 @@ void loop() {
       double acc_mag0 = 0.0, acc_mag1 = 0.0;
       double mags0[PACKET_LEN];
       double mags1[PACKET_LEN];
+      
+      // --- Búsqueda de sincronización: encontrar el mejor offset ---
+      // Intentar diferentes offsets y elegir el que mejor match con confirmación esperada
+      int best_offset = 0;
+      int best_matches = 0;
+      
+      // Expandir rango de búsqueda
+      for (int test_offset = -10; test_offset <= 10; test_offset++) {
+        int matches = 0;
+        // Verificar bits de confirmación (4-7) contra patrón esperado 1010
+        for (int k = 4; k < 8; ++k) {
+          int offset = k * BIT_DURATION + (BIT_DURATION - SYM_FFT_N) / 2 + 10 + test_offset;
+          if (offset >= 0 && offset + SYM_FFT_N <= SAMPLES) {
+            int bit_est = 0;
+            double m0 = 0.0, m1 = 0.0;
+            demodulateSymbolFFT_withMags(&vReal[offset], bit_est, m0, m1);
+            if (bit_est == expected_confirmation_bits[k - 4]) {
+              matches++;
+            }
+          }
+        }
+        // Solo considerar offsets que dan al menos 3 matches
+        if (matches >= 3 && matches > best_matches) {
+          best_matches = matches;
+          best_offset = test_offset;
+        }
+      }
+      
+      // Si no hay buen match, usar offset 0 por defecto
+      if (best_matches < 3) {
+        best_offset = 0;
+      }
+      
+      // Debug: mostrar offset elegido
+      Serial.print("DEBUG: best_offset="); Serial.print(best_offset); 
+      Serial.print(" matches="); Serial.println(best_matches);
+      
+      // Usar el mejor offset encontrado
       for (int k = 0; k < PACKET_LEN; ++k) {
         int bit_est = 0;
         double m0 = 0.0, m1 = 0.0;
-        // Usar solo la mitad central de cada bit (offset de 32 muestras, 64 muestras de longitud)
-        int offset = k * BIT_DURATION + (BIT_DURATION - SYM_FFT_N) / 2;
-        demodulateSymbolFFT_withMags(&vReal[offset], bit_est, m0, m1);
-        received_packet[k] = (uint8_t)bit_est;
-        if (bit_est == 1) received_all_zeros = false;
-        acc_mag0 += m0; acc_mag1 += m1;
-        mags0[k] = m0; mags1[k] = m1;
+        int offset = k * BIT_DURATION + (BIT_DURATION - SYM_FFT_N) / 2 + 10 + best_offset;
+        if (offset >= 0 && offset + SYM_FFT_N <= SAMPLES) {
+          demodulateSymbolFFT_withMags(&vReal[offset], bit_est, m0, m1);
+          received_packet[k] = (uint8_t)bit_est;
+          if (bit_est == 1) received_all_zeros = false;
+          acc_mag0 += m0; acc_mag1 += m1;
+          mags0[k] = m0; mags1[k] = m1;
+        }
+      }
+
+      // --- Validación mejorada: threshold adaptativo y mayoría de votos ---
+      for (int k = 0; k < PACKET_LEN; ++k) {
+        double margin = fabs(mags0[k] - mags1[k]);
+        int current_bit = received_packet[k];
+        
+        // Si el margen es muy bajo (< 3000), el bit es poco confiable
+        if (margin < 3000.0 && k > 0 && k < PACKET_LEN - 1) {
+          int left_bit = received_packet[k - 1];
+          int right_bit = received_packet[k + 1];
+          
+          // Si ambos vecinos son iguales, usar consenso
+          if (left_bit == right_bit) {
+            received_packet[k] = left_bit;
+          }
+          // Si vecinos son diferentes, mantener el bit actual pero marcar como bajo margen
+        }
       }
 
       if (!received_all_zeros) {
@@ -282,10 +365,64 @@ void loop() {
           
           // *** REPRODUCIR MENSAJE EN EL BUZZER ***
           playMessageOnBuzzer(received_message, MESSAGE_LEN);
+          
+          // Transición a cooldown para evitar duplicados
+          cooldown_start_time = millis();
+          current_state = COOLDOWN;
+          break;
         }
       }
       
-      current_state = WAITING_FOR_SIGNAL;
+      // --- Limpieza y reseteo de estado para evitar interferencia ---
+      // Resetear buffers de FFT
+      for (int i = 0; i < SAMPLES; i++) {
+        vReal[i] = 0.0;
+        vImag[i] = 0.0;
+      }
+      // Resetear estado del filtro IIR
+      filtered_sample = 0.0;
+      filtered_sample_z1 = 0.0;
+      filtered_sample_z2 = 0.0;
+      filtered_output_z1 = 0.0;
+      filtered_output_z2 = 0.0;
+      
+      // Transición a estado de limpieza sin bloqueante ---
+      cleanup_start_time = millis();
+      current_state = CLEANUP;
+      break;
+    }
+
+    case COOLDOWN: {
+      // Esperar el tiempo de cooldown sin procesar señales
+      unsigned long cooldown_elapsed = millis() - cooldown_start_time;
+      
+      if (cooldown_elapsed >= COOLDOWN_DURATION_MS) {
+        // Cooldown terminado, volver a esperar señales
+        current_state = WAITING_FOR_SIGNAL;
+      }
+      break;
+    }
+
+    case CLEANUP: {
+      // Limpieza gradual sin bloquear
+      unsigned long cleanup_elapsed = millis() - cleanup_start_time;
+      
+      // Resetear buffers de FFT
+      for (int i = 0; i < SAMPLES; i++) {
+        vReal[i] = 0.0;
+        vImag[i] = 0.0;
+      }
+      // Resetear estado del filtro IIR
+      filtered_sample = 0.0;
+      filtered_sample_z1 = 0.0;
+      filtered_sample_z2 = 0.0;
+      filtered_output_z1 = 0.0;
+      filtered_output_z2 = 0.0;
+      
+      // Después del tiempo de limpieza, volver a esperar señal
+      if (cleanup_elapsed >= CLEANUP_DURATION_MS) {
+        current_state = WAITING_FOR_SIGNAL;
+      }
       break;
     }
   }

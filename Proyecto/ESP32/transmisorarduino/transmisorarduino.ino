@@ -10,7 +10,7 @@ const int FSK_PIN = 9; // Pin digital 9 en Arduino (equivalente al GP15 usado en
 // --- Parámetros FSK ---
 const int FREQ_0 = 1000;
 const int FREQ_1 = 2000;
-const long BIT_DURATION_US = 16000; // 16 ms
+const long BIT_DURATION_US = 11000; // 11 ms
 
 // --- Componentes del Mensaje ---
 const uint8_t data_message[4] = {0, 1, 0, 1};
@@ -30,7 +30,7 @@ unsigned long next_toggle_time_us = 0;
 // Control de transmisión periódica
 unsigned long last_packet_time_ms = 0;
 bool is_transmitting = true; // iniciar transmitiendo el primer paquete
-const unsigned long PACKET_INTERVAL_MS = 1000; // 1 segundo entre paquetes
+const unsigned long PACKET_INTERVAL_MS = 0; // sin delay, transmitir continuamente
 
 void setup() {
   Serial.begin(115200);

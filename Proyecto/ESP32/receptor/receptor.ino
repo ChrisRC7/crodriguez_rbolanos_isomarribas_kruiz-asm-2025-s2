@@ -22,7 +22,7 @@
 #define SYM_FFT_N 64
 
 // --- Configuración del Mensaje ---
-const int PACKET_LEN = 12;
+const int PACKET_LEN = 13;  // 1 bit sincronización + 12 bits datos
 const int MESSAGE_LEN = 4;
 const uint8_t expected_confirmation_bits[4] = {1, 0, 1, 0};
 
@@ -241,20 +241,21 @@ void loop() {
       
       // --- Búsqueda de sincronización: encontrar el mejor offset ---
       // Intentar diferentes offsets y elegir el que mejor match con confirmación esperada
+      // Bits de confirmación ahora están en posiciones 5-8 (bit 0 es sync, bits 1-4 son mensaje)
       int best_offset = 0;
       int best_matches = 0;
       
       // Expandir rango de búsqueda
       for (int test_offset = -10; test_offset <= 10; test_offset++) {
         int matches = 0;
-        // Verificar bits de confirmación (4-7) contra patrón esperado 1010
-        for (int k = 4; k < 8; ++k) {
+        // Verificar bits de confirmación (5-8) contra patrón esperado 1010
+        for (int k = 5; k < 9; ++k) {
           int offset = k * BIT_DURATION + (BIT_DURATION - SYM_FFT_N) / 2 + 10 + test_offset;
           if (offset >= 0 && offset + SYM_FFT_N <= SAMPLES) {
             int bit_est = 0;
             double m0 = 0.0, m1 = 0.0;
             demodulateSymbolFFT_withMags(&vReal[offset], bit_est, m0, m1);
-            if (bit_est == expected_confirmation_bits[k - 4]) {
+            if (bit_est == expected_confirmation_bits[k - 5]) {
               matches++;
             }
           }
@@ -279,6 +280,7 @@ void loop() {
       for (int k = 0; k < PACKET_LEN; ++k) {
         int bit_est = 0;
         double m0 = 0.0, m1 = 0.0;
+        // Bit 0 es sincronización (se ignora en la validación), no aplicar extra_offset
         int offset = k * BIT_DURATION + (BIT_DURATION - SYM_FFT_N) / 2 + 10 + best_offset;
         if (offset >= 0 && offset + SYM_FFT_N <= SAMPLES) {
           demodulateSymbolFFT_withMags(&vReal[offset], bit_est, m0, m1);
@@ -308,13 +310,22 @@ void loop() {
       }
 
       if (!received_all_zeros) {
+        // Ignorar bit 0 (sincronización) y procesar bits 1-12 como datos
         uint8_t received_message[MESSAGE_LEN];
         uint8_t received_confirmation[MESSAGE_LEN];
         uint8_t received_checksum[MESSAGE_LEN];
+        
+        // Bits 1-4: Mensaje
         for(int i = 0; i < MESSAGE_LEN; i++) {
-          received_message[i] = received_packet[i];
-          received_confirmation[i] = received_packet[i + MESSAGE_LEN];
-          received_checksum[i] = received_packet[i + 2 * MESSAGE_LEN];
+          received_message[i] = received_packet[1 + i];
+        }
+        // Bits 5-8: Confirmación
+        for(int i = 0; i < MESSAGE_LEN; i++) {
+          received_confirmation[i] = received_packet[5 + i];
+        }
+        // Bits 9-12: Checksum
+        for(int i = 0; i < MESSAGE_LEN; i++) {
+          received_checksum[i] = received_packet[9 + i];
         }
 
         bool confirmation_ok = true;
@@ -335,8 +346,11 @@ void loop() {
         }
         
         if (confirmation_ok && checksum_ok) {
-          Serial.print("Paquete recibido (12): ");
+          Serial.print("Paquete recibido (13 bits, primero es sync): ");
           for (int i = 0; i < PACKET_LEN; ++i) Serial.print(received_packet[i]);
+          Serial.println();
+          Serial.print("Mensaje extraído (bits 1-4): ");
+          for (int i = 0; i < MESSAGE_LEN; ++i) Serial.print(received_message[i]);
           Serial.println();
 
           Serial.println("Idx  Bit   MagF0   MagF1");

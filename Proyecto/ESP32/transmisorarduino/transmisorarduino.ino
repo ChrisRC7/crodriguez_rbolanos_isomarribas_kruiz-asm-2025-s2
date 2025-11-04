@@ -17,8 +17,8 @@ const uint8_t data_message[4] = {0, 1, 0, 1};
 const uint8_t confirmation_bits[4] = {1, 0, 1, 0}; // Patrón de confirmación fijo
 const int MESSAGE_LEN = 4;
 
-// --- Paquete de Transmisión Completo (12 bits) ---
-const int PACKET_LEN = 12;
+// --- Paquete de Transmisión Completo (13 bits = 1 bit sync + 12 bits data) ---
+const int PACKET_LEN = 13;
 uint8_t transmission_packet[PACKET_LEN];
 
 // --- Temporización (para transmisión continua) ---
@@ -38,7 +38,10 @@ void setup() {
   digitalWrite(FSK_PIN, LOW);
   delay(1000);
 
-  // --- Construir el paquete de transmisión de 12 bits ---
+  // --- Construir el paquete de transmisión de 13 bits ---
+  // Bit 0: Bit de sincronización (siempre 1)
+  transmission_packet[0] = 1;
+  
   uint8_t checksum_bits[MESSAGE_LEN];
 
   // 1. Calcular el checksum (XOR entre el mensaje y los bits de confirmación)
@@ -46,15 +49,15 @@ void setup() {
     checksum_bits[i] = data_message[i] ^ confirmation_bits[i];
   }
   
-  // 2. Ensamblar el paquete completo
+  // 2. Ensamblar el paquete completo (desplazado +1 por el bit de sync)
   for (int i = 0; i < MESSAGE_LEN; i++) {
-    transmission_packet[i] = data_message[i];                     // Primeros 4: Mensaje
-    transmission_packet[i + MESSAGE_LEN] = confirmation_bits[i];  // Siguientes 4: Confirmación
-    transmission_packet[i + 2 * MESSAGE_LEN] = checksum_bits[i];  // Últimos 4: Checksum
+    transmission_packet[1 + i] = data_message[i];                              // Bits 1-4: Mensaje
+    transmission_packet[1 + MESSAGE_LEN + i] = confirmation_bits[i];          // Bits 5-8: Confirmación
+    transmission_packet[1 + 2 * MESSAGE_LEN + i] = checksum_bits[i];          // Bits 9-12: Checksum
   }
   
   Serial.println("Transmisor FSK con Checksum Personalizado (Arduino) iniciado...");
-  Serial.print("Paquete completo a transmitir (12 bits): ");
+  Serial.print("Paquete completo a transmitir (13 bits, primero es sync=1): ");
   for (int i = 0; i < PACKET_LEN; i++) Serial.print(transmission_packet[i]);
   Serial.println();
 }

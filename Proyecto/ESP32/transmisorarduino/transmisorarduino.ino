@@ -10,10 +10,10 @@ const int FSK_PIN = 9; // Pin digital 9 en Arduino (equivalente al GP15 usado en
 // --- Parámetros FSK ---
 const int FREQ_0 = 1000;
 const int FREQ_1 = 2000;
-const long BIT_DURATION_US = 8000; // 8 ms
+const long BIT_DURATION_US = 16000; // 16 ms
 
 // --- Componentes del Mensaje ---
-const uint8_t data_message[4] = {1, 1, 0, 0};
+const uint8_t data_message[4] = {0, 1, 0, 1};
 const uint8_t confirmation_bits[4] = {1, 0, 1, 0}; // Patrón de confirmación fijo
 const int MESSAGE_LEN = 4;
 
@@ -27,6 +27,10 @@ const long HALF_PERIOD_1_US = 1000000 / (2 * FREQ_1);
 int current_bit_index = 0;
 unsigned long bit_start_time_us = 0;
 unsigned long next_toggle_time_us = 0;
+// Control de transmisión periódica
+unsigned long last_packet_time_ms = 0;
+bool is_transmitting = true; // iniciar transmitiendo el primer paquete
+const unsigned long PACKET_INTERVAL_MS = 1000; // 1 segundo entre paquetes
 
 void setup() {
   Serial.begin(115200);
@@ -57,7 +61,24 @@ void setup() {
 
 void loop() {
   unsigned long current_time_us = micros();
+  unsigned long current_time_ms = millis();
 
+  // Si no estamos transmitiendo, comprobar si ha pasado el intervalo
+  if (!is_transmitting) {
+    if (current_time_ms - last_packet_time_ms >= PACKET_INTERVAL_MS) {
+      // Iniciar nueva transmisión
+      is_transmitting = true;
+      current_bit_index = 0;
+      bit_start_time_us = 0;
+      next_toggle_time_us = 0;
+      Serial.println("Iniciando transmisión de paquete...");
+    } else {
+      // Esperar sin hacer nada
+      return;
+    }
+  }
+
+  // Transmisión del bit actual
   if (bit_start_time_us == 0) {
     bit_start_time_us = current_time_us;
     next_toggle_time_us = current_time_us;
@@ -75,13 +96,18 @@ void loop() {
     long half_period = (transmission_packet[current_bit_index] == 1) ? HALF_PERIOD_1_US : HALF_PERIOD_0_US;
     next_toggle_time_us += half_period;
   }
-  
+
   if (current_time_us - bit_start_time_us >= BIT_DURATION_US) {
     current_bit_index++;
     bit_start_time_us = 0;
-    
+
     if (current_bit_index >= PACKET_LEN) {
-      current_bit_index = 0;
+      // Pausa antes de la siguiente transmisión
+      is_transmitting = false;
+      last_packet_time_ms = millis();
+      // Asegurar que la salida quede en LOW cuando no se transmite
+      digitalWrite(FSK_PIN, LOW);
+      Serial.println("Paquete transmitido. Esperando 1s para el siguiente.");
     }
   }
 }

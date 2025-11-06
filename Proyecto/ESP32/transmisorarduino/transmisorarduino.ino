@@ -18,6 +18,12 @@ const int FREQ_1_PKT2 = 4000;
 
 const long BIT_DURATION_US = 8000; // 8 ms
 
+// --- Modo de Calibración ---
+const long CALIBRATION_BIT_DURATION_MS = 3000; // 3 segundos por bit
+const uint8_t calibration_sequence[] = {0, 1, 0, 1}; // Secuencia para calibrar
+const int CALIBRATION_LENGTH = 4;
+bool calibration_done = false;
+
 // --- Componentes del Paquete 1 ---
 const uint8_t data_message_pkt1[4] = {0, 1, 0, 1};
 const uint8_t confirmation_bits_pkt1[4] = {1, 0, 1, 0};
@@ -27,10 +33,10 @@ const int PACKET_LEN_PKT1 = 13;  // 1 sync + 4 mensaje + 4 confirmación + 4 che
 // --- Componentes del Paquete 2 (Carácter ASCII) ---
 char ascii_char = '5'; // Carácter a enviar (cualquier ASCII)
 uint8_t data_message_pkt2[8];  // 8 bits para ASCII completo
-const uint8_t confirmation_bits_pkt2[8] = {1, 0, 1, 0, 1, 0, 1, 0};
+const uint8_t confirmation_bits_pkt2[4] = {1, 0, 1, 0};
 const int MESSAGE_LEN_PKT2 = 8;
-const int CONF_LEN_PKT2 = 8;
-const int PACKET_LEN_PKT2 = 25;  // 1 sync + 8 mensaje + 8 confirmación + 8 checksum XOR
+const int CONF_LEN_PKT2 = 4;
+const int PACKET_LEN_PKT2 = 17;  // 1 sync + 8 mensaje + 4 confirmación + 4 checksum
 
 // --- Paquetes de Transmisión ---
 uint8_t transmission_packet_1[PACKET_LEN_PKT1];
@@ -73,25 +79,25 @@ void buildPacket(uint8_t* packet, const uint8_t* data_msg, const uint8_t* conf_b
   delete[] checksum_bits;
 }
 
-// --- Función para construir paquete 2 con paridad ---
+// --- Función para construir paquete 2 (con checksum de 4 bits) ---
 void buildPacket2(uint8_t* packet, const uint8_t* data_msg, const uint8_t* conf_bits, int msg_len, int conf_len) {
-  // Ensamblar el paquete: sync + mensaje + confirmación + paridad
+  // Ensamblar el paquete: sync + mensaje (8 bits) + confirmación (4 bits) + checksum (4 bits)
   packet[0] = 1; // Bit de sincronización
   
-  int ones_count = 1; // Contar el sync
-  
+  // Copiar mensaje (8 bits)
   for (int i = 0; i < msg_len; i++) {
     packet[1 + i] = data_msg[i];
-    if (data_msg[i] == 1) ones_count++;
   }
   
+  // Copiar confirmación (4 bits)
   for (int i = 0; i < conf_len; i++) {
     packet[1 + msg_len + i] = conf_bits[i];
-    if (conf_bits[i] == 1) ones_count++;
   }
   
-  // Bit de paridad par: hacer que el total de 1s sea par
-  packet[1 + msg_len + conf_len] = (ones_count % 2 == 0) ? 0 : 1;
+  // Calcular checksum (XOR entre los primeros 4 bits del mensaje y confirmación)
+  for (int i = 0; i < conf_len; i++) {
+    packet[1 + msg_len + conf_len + i] = data_msg[i] ^ conf_bits[i];
+  }
 }
 
 void setup() {
@@ -103,9 +109,9 @@ void setup() {
   // --- Construir Paquete 1 (13 bits: 4 bits mensaje) ---
   buildPacket(transmission_packet_1, data_message_pkt1, confirmation_bits_pkt1, MESSAGE_LEN_PKT1);
   
-  // --- Construir Paquete 2 (25 bits: 8 bits ASCII con XOR) ---
+  // --- Construir Paquete 2 (17 bits: 8 bits ASCII + 4 bits confirmación + 4 bits checksum) ---
   asciiTo8Bits(ascii_char, data_message_pkt2);
-  buildPacket(transmission_packet_2, data_message_pkt2, confirmation_bits_pkt2, MESSAGE_LEN_PKT2);
+  buildPacket2(transmission_packet_2, data_message_pkt2, confirmation_bits_pkt2, MESSAGE_LEN_PKT2, CONF_LEN_PKT2);
   
   Serial.println("=== Transmisor FSK Dual (Arduino) ===");
   Serial.println();
@@ -153,6 +159,78 @@ void setup() {
   Serial.print("ms, PKT2: ");
   Serial.print(PACKET_LEN_PKT2 * 8);
   Serial.println("ms");
+  
+  Serial.println();
+  Serial.println("=== MODO CALIBRACION ===");
+  Serial.println("Enviando secuencia de calibracion: 0,1,0,1");
+  Serial.print("Duracion por bit: ");
+  Serial.print(CALIBRATION_BIT_DURATION_MS);
+  Serial.println("ms");
+  Serial.println("Frecuencias PKT1 (para calibrar PKT1):");
+  Serial.print("  f0=");
+  Serial.print(FREQ_0_PKT1);
+  Serial.print("Hz, f1=");
+  Serial.print(FREQ_1_PKT1);
+  Serial.println("Hz");
+  Serial.println();
+  
+  // Enviar secuencia de calibración para PKT1
+  for (int i = 0; i < CALIBRATION_LENGTH; i++) {
+    Serial.print("Enviando bit ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(calibration_sequence[i]);
+    
+    int freq = (calibration_sequence[i] == 1) ? FREQ_1_PKT1 : FREQ_0_PKT1;
+    long half_period = 1000000 / (2 * freq);
+    unsigned long start_time = millis();
+    
+    while (millis() - start_time < CALIBRATION_BIT_DURATION_MS) {
+      digitalWrite(FSK_PIN, HIGH);
+      delayMicroseconds(half_period);
+      digitalWrite(FSK_PIN, LOW);
+      delayMicroseconds(half_period);
+    }
+  }
+  
+  digitalWrite(FSK_PIN, LOW);
+  Serial.println("Calibracion PKT1 completada!");
+  Serial.println();
+  
+  // Calibración para PKT2
+  Serial.println("Frecuencias PKT2 (para calibrar PKT2):");
+  Serial.print("  f0=");
+  Serial.print(FREQ_0_PKT2);
+  Serial.print("Hz, f1=");
+  Serial.print(FREQ_1_PKT2);
+  Serial.println("Hz");
+  Serial.println();
+  
+  for (int i = 0; i < CALIBRATION_LENGTH; i++) {
+    Serial.print("Enviando bit ");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.println(calibration_sequence[i]);
+    
+    int freq = (calibration_sequence[i] == 1) ? FREQ_1_PKT2 : FREQ_0_PKT2;
+    long half_period = 1000000 / (2 * freq);
+    unsigned long start_time = millis();
+    
+    while (millis() - start_time < CALIBRATION_BIT_DURATION_MS) {
+      digitalWrite(FSK_PIN, HIGH);
+      delayMicroseconds(half_period);
+      digitalWrite(FSK_PIN, LOW);
+      delayMicroseconds(half_period);
+    }
+  }
+  
+  digitalWrite(FSK_PIN, LOW);
+  Serial.println("Calibracion PKT2 completada!");
+  Serial.println();
+  Serial.println("Iniciando transmision normal...");
+  Serial.println("========================================");
+  
+  calibration_done = true;
 }
 
 void loop() {

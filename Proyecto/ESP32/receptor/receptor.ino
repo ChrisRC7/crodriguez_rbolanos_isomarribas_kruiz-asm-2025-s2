@@ -11,7 +11,7 @@
 // --- Parámetros de Hardware y Señal ---
 #define ADC_PIN 34
 #define BUZZER_PIN 25
-#define SAMPLES 2560   // Capturar ambos paquetes: (13+25)*64 = 2432, uso 2560 para margen
+#define SAMPLES 2560   // Buffer para ambos paquetes
 #define SAMPLING_FREQ 8000
 #define SAMPLING_PERIOD_US (1000000 / SAMPLING_FREQ)
 
@@ -19,15 +19,15 @@
 #define BIT_DURATION 64
 #define SYM_FFT_N 64
 const int PACKET_LEN_PKT1 = 13;  // Paquete 1: 1 sync + 4 msg + 4 conf + 4 checksum
-const int PACKET_LEN_PKT2 = 25;  // Paquete 2: 1 sync + 8 msg + 8 conf + 8 checksum
+const int PACKET_LEN_PKT2 = 17;  // Paquete 2: 1 sync + 8 msg + 4 conf + 4 checksum
 const int MESSAGE_LEN_PKT1 = 4;
 const int MESSAGE_LEN_PKT2 = 8;
 const int CONF_LEN_PKT1 = 4;
-const int CONF_LEN_PKT2 = 8;
+const int CONF_LEN_PKT2 = 4;
 
 // --- Configuración del Mensaje ---
 const uint8_t expected_confirmation_bits_pkt1[4] = {1, 0, 1, 0};
-const uint8_t expected_confirmation_bits_pkt2[8] = {1, 0, 1, 0, 1, 0, 1, 0};
+const uint8_t expected_confirmation_bits_pkt2[4] = {1, 0, 1, 0};
 
 // --- Buzzer Config ---
 const int BUZZER_FREQ = 2000;
@@ -39,16 +39,25 @@ volatile bool pkt1_received = false;
 uint8_t saved_pkt1_message[8];
 int saved_pkt1_length = 0;
 
+// --- Control de alternancia de paquetes ---
+volatile bool waiting_for_pkt1 = true;  // Empezamos esperando PKT1
+volatile bool pkt2_received = false;
+
 // --- Buffers Compartidos ---
 double vReal[SAMPLES];
 double vImag[SAMPLES];
 
 // --- Frecuencias Detectadas (compartidas entre cores) ---
-volatile bool frequencies_detected = true;  // Ya las conocemos
+volatile bool frequencies_detected = false;  // Se detectarán en calibración
 volatile int freq_0_pkt1 = 1000;
 volatile int freq_1_pkt1 = 2000;
 volatile int freq_0_pkt2 = 3000;
 volatile int freq_1_pkt2 = 4000;
+
+// --- Calibración ---
+volatile bool calibration_mode = true;
+volatile int calibration_step = 0;  // 0-7: PKT1(f0,f1,f0,f1), PKT2(f0,f1,f0,f1)
+const int CALIBRATION_SAMPLES = 2048;  // ~256ms de muestreo @ 8kHz
 
 // --- TFT ST7735 ---
 #define TFT_RST    22
@@ -57,8 +66,8 @@ volatile int freq_1_pkt2 = 4000;
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 // --- Máquina de Estados ---
-enum State { WAITING_FOR_SIGNAL, SAMPLING, DEMODULATING };
-volatile State current_state = WAITING_FOR_SIGNAL;
+enum State { CALIBRATING, WAITING_FOR_SIGNAL, SAMPLING, DEMODULATING };
+volatile State current_state = CALIBRATING;
 const double SIGNAL_THRESHOLD = 200.0;
 
 // --- Mutex para proteger acceso a buffers ---
@@ -68,9 +77,9 @@ SemaphoreHandle_t xMutex = NULL;
 struct PacketResult {
   bool valid;
   uint8_t message[8];  // Máximo 8 bits (para PKT2)
-  uint8_t full_packet[25];  // Máximo 25 bits (para PKT2)
-  double mags0[25];
-  double mags1[25];
+  uint8_t full_packet[17];  // PKT2 ahora es 17 bits (máximo)
+  double mags0[17];
+  double mags1[17];
   int msg_len;
   int pkt_len;
 };
@@ -79,103 +88,39 @@ volatile PacketResult pkt1_result;
 volatile PacketResult pkt2_result;
 
 
-// --- Función para detectar las 4 frecuencias dominantes ---
-void detectFrequencies() {
-  Serial.println("\n=== Detectando frecuencias ===");
+// --- Función para detectar frecuencia durante calibración ---
+int detectSingleFrequency(const double* signal, int sample_count) {
+  static double r[1024], im[1024];
+  int fft_size = (sample_count > 1024) ? 1024 : sample_count;
   
-  // Usar menos muestras para detección rápida
-  const int DETECT_SAMPLES = 1024;  // Aumentado para mejor resolución
-  static double r[DETECT_SAMPLES], im[DETECT_SAMPLES];
-  
-  for (int i = 0; i < DETECT_SAMPLES; i++) {
-    r[i] = vReal[i];
+  for (int i = 0; i < fft_size; i++) {
+    r[i] = signal[i];
     im[i] = 0.0;
   }
   
-  ArduinoFFT<double> fft(r, im, DETECT_SAMPLES, SAMPLING_FREQ);
+  ArduinoFFT<double> fft(r, im, fft_size, SAMPLING_FREQ);
   fft.windowing(FFTWindow::Hamming, FFTDirection::Forward);
   fft.compute(FFTDirection::Forward);
   fft.complexToMagnitude();
   
-  const int MIN_BIN = (500 * DETECT_SAMPLES) / SAMPLING_FREQ;
-  const int MAX_BIN = (5000 * DETECT_SAMPLES) / SAMPLING_FREQ;
+  // Buscar el pico máximo entre 500Hz y 5000Hz
+  int min_bin = (500 * fft_size) / SAMPLING_FREQ;
+  int max_bin = (5000 * fft_size) / SAMPLING_FREQ;
   
-  struct Peak {
-    int bin;
-    double magnitude;
-    int freq;
-  };
+  int peak_bin = min_bin;
+  double peak_mag = r[min_bin];
   
-  Peak peaks[4] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
-  
-  // Buscar los 4 picos más altos, asegurando separación mínima de 700Hz
-  const int MIN_SEPARATION_BINS = (700 * DETECT_SAMPLES) / SAMPLING_FREQ;
-  
-  for (int i = MIN_BIN; i < MAX_BIN && i < DETECT_SAMPLES/2; i++) {
-    // Verificar que este pico esté suficientemente separado de los ya encontrados
-    bool too_close = false;
-    for (int p = 0; p < 4; p++) {
-      if (peaks[p].magnitude > 0 && abs(i - peaks[p].bin) < MIN_SEPARATION_BINS) {
-        too_close = true;
-        break;
-      }
-    }
-    
-    if (!too_close) {
-      for (int p = 0; p < 4; p++) {
-        if (r[i] > peaks[p].magnitude) {
-          for (int j = 3; j > p; j--) {
-            peaks[j] = peaks[j-1];
-          }
-          peaks[p].bin = i;
-          peaks[p].magnitude = r[i];
-          peaks[p].freq = (i * SAMPLING_FREQ) / DETECT_SAMPLES;
-          break;
-        }
-      }
+  for (int i = min_bin; i < max_bin && i < fft_size/2; i++) {
+    if (r[i] > peak_mag) {
+      peak_mag = r[i];
+      peak_bin = i;
     }
   }
   
-  // Ordenar por frecuencia
-  for (int i = 0; i < 3; i++) {
-    for (int j = i + 1; j < 4; j++) {
-      if (peaks[j].freq < peaks[i].freq) {
-        Peak temp = peaks[i];
-        peaks[i] = peaks[j];
-        peaks[j] = temp;
-      }
-    }
-  }
-  
-  // Mostrar info de depuración
-  Serial.println("  Picos detectados:");
-  for (int i = 0; i < 4; i++) {
-    Serial.print("    Pico ");
-    Serial.print(i);
-    Serial.print(": ");
-    Serial.print(peaks[i].freq);
-    Serial.print("Hz (mag: ");
-    Serial.print(peaks[i].magnitude);
-    Serial.println(")");
-  }
-  
-  freq_0_pkt1 = peaks[0].freq;
-  freq_1_pkt1 = peaks[1].freq;
-  freq_0_pkt2 = peaks[2].freq;
-  freq_1_pkt2 = peaks[3].freq;
-  
-  Serial.print("  Asignacion final:\n");
-  Serial.print("    PKT1: f0=");
-  Serial.print(freq_0_pkt1);
-  Serial.print("Hz, f1=");
-  Serial.println(freq_1_pkt1);
-  Serial.print("    PKT2: f0=");
-  Serial.print(freq_0_pkt2);
-  Serial.print("Hz, f1=");
-  Serial.println(freq_1_pkt2);
-  
-  frequencies_detected = true;
+  int detected_freq = (peak_bin * SAMPLING_FREQ) / fft_size;
+  return detected_freq;
 }
+
 
 // Variante que expone también las magnitudes en F0 y F1 (reutiliza la misma FFT por símbolo)
 static void demodulateSymbolFFT_withMags(const double* in, int& bit_out, double& out_mag0, double& out_mag1, int f0, int f1) {
@@ -215,6 +160,7 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
   }
   
   // Demodular todos los bits del paquete desde el sync
+  double total_energy = 0.0;
   for (int k = 0; k < pkt_len; ++k) {
     int bit_est = 0;
     double m0 = 0.0, m1 = 0.0;
@@ -223,6 +169,15 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
     if (bit_est == 1) received_all_zeros = false;
     result.mags0[k] = m0;
     result.mags1[k] = m1;
+    total_energy += (m0 + m1);  // Acumular energía total
+  }
+  
+  // Calcular energía promedio
+  double avg_energy = total_energy / pkt_len;
+  
+  // Rechazar si la energía promedio es muy baja (probablemente ruido)
+  if (avg_energy < 1000.0) {
+    return false;  // Energía insuficiente, no es una señal válida
   }
   
   result.valid = false;
@@ -258,11 +213,12 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
   bool checksum_ok = true;
   if (validate_checksum) {
     uint8_t received_checksum[8];
-    for(int i = 0; i < msg_len; i++) {
+    for(int i = 0; i < conf_len; i++) {  // Checksum tiene conf_len bits (4)
       received_checksum[i] = received_packet[1 + msg_len + conf_len + i];
     }
     
-    for(int i = 0; i < msg_len; i++) {
+    // Validar: checksum[i] = mensaje[i] XOR confirmacion[i] (solo los primeros conf_len bits)
+    for(int i = 0; i < conf_len; i++) {
       if ((received_message[i] ^ received_confirmation[i]) != received_checksum[i]) {
         checksum_ok = false;
         break;
@@ -383,18 +339,8 @@ void setup() {
   
   Serial.println("\n========================================");
   Serial.println("  Receptor FSK Dual-Core");
-  Serial.println("  Frecuencias fijas:");
-  Serial.print("    PKT1: ");
-  Serial.print(freq_0_pkt1);
-  Serial.print("/");
-  Serial.print(freq_1_pkt1);
-  Serial.println(" Hz");
-  Serial.print("    PKT2: ");
-  Serial.print(freq_0_pkt2);
-  Serial.print("/");
-  Serial.print(freq_1_pkt2);
-  Serial.println(" Hz");
-  Serial.println("========================================");;
+  Serial.println("  Iniciando calibracion automatica...");
+  Serial.println("========================================");
 
   tft.initR(INITR_BLACKTAB);
   tft.fillScreen(ST77XX_BLACK);
@@ -405,7 +351,7 @@ void setup() {
   tft.setCursor(4, 4);
   tft.println("ESP32 Receptor Dual");
   tft.setCursor(4, 16);
-  tft.println("Esperando senal...");
+  tft.println("Calibrando...");
   
   xMutex = xSemaphoreCreateMutex();
   
@@ -489,7 +435,90 @@ void core0Task(void * pvParameters) {
   Serial.println("[Core 0] Iniciado");
   
   while(1) {
-    if (current_state == WAITING_FOR_SIGNAL) {
+    if (current_state == CALIBRATING) {
+      // Modo calibración: capturar 8 tonos de 3 segundos cada uno
+      if (calibration_step < 8) {
+        Serial.print("\n[CALIBRACION] Paso ");
+        Serial.print(calibration_step + 1);
+        Serial.println("/8 - Esperando señal...");
+        
+        // Esperar señal fuerte
+        while (abs((double)analogRead(ADC_PIN) - 2048.0) < SIGNAL_THRESHOLD) {
+          delay(10);
+        }
+        
+        Serial.println("[CALIBRACION] Señal detectada, muestreando ~250ms...");
+        
+        // Capturar 2048 muestras @ 8kHz (~256ms de señal)
+        unsigned long next_t = micros();
+        for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
+          while (micros() < next_t) { }
+          vReal[i] = (double)analogRead(ADC_PIN);
+          next_t += SAMPLING_PERIOD_US;
+        }
+        
+        // Detectar frecuencia dominante
+        int detected_freq = detectSingleFrequency(vReal, CALIBRATION_SAMPLES);
+        
+        Serial.print("[CALIBRACION] Frecuencia detectada: ");
+        Serial.print(detected_freq);
+        Serial.println(" Hz");
+        
+        // Almacenar según el paso
+        switch(calibration_step) {
+          case 0: freq_0_pkt1 = detected_freq; break;
+          case 1: freq_1_pkt1 = detected_freq; break;
+          case 2: // Validación freq_0_pkt1
+            if (abs(detected_freq - freq_0_pkt1) > 100) {
+              Serial.println("[CALIBRACION] ADVERTENCIA: Frecuencia inconsistente");
+            }
+            break;
+          case 3: // Validación freq_1_pkt1
+            if (abs(detected_freq - freq_1_pkt1) > 100) {
+              Serial.println("[CALIBRACION] ADVERTENCIA: Frecuencia inconsistente");
+            }
+            break;
+          case 4: freq_0_pkt2 = detected_freq; break;
+          case 5: freq_1_pkt2 = detected_freq; break;
+          case 6: // Validación freq_0_pkt2
+            if (abs(detected_freq - freq_0_pkt2) > 100) {
+              Serial.println("[CALIBRACION] ADVERTENCIA: Frecuencia inconsistente");
+            }
+            break;
+          case 7: // Validación freq_1_pkt2
+            if (abs(detected_freq - freq_1_pkt2) > 100) {
+              Serial.println("[CALIBRACION] ADVERTENCIA: Frecuencia inconsistente");
+            }
+            break;
+        }
+        
+        calibration_step++;
+        
+        // Esperar a que termine el tono de 3 segundos
+        delay(2750);
+        
+        if (calibration_step >= 8) {
+          // Calibración completa
+          Serial.println("\n========== CALIBRACION COMPLETA ==========");
+          Serial.print("PKT1 -> f0: ");
+          Serial.print(freq_0_pkt1);
+          Serial.print(" Hz, f1: ");
+          Serial.print(freq_1_pkt1);
+          Serial.println(" Hz");
+          Serial.print("PKT2 -> f0: ");
+          Serial.print(freq_0_pkt2);
+          Serial.print(" Hz, f1: ");
+          Serial.print(freq_1_pkt2);
+          Serial.println(" Hz");
+          Serial.println("==========================================\n");
+          
+          frequencies_detected = true;
+          calibration_mode = false;
+          current_state = WAITING_FOR_SIGNAL;
+        }
+      }
+    }
+    else if (current_state == WAITING_FOR_SIGNAL) {
       if (abs((double)analogRead(ADC_PIN) - 2048.0) > SIGNAL_THRESHOLD) {
         current_state = SAMPLING;
       }
@@ -516,72 +545,133 @@ void core0Task(void * pvParameters) {
       }
     }
     else if (current_state == DEMODULATING) {
-      // Demodular PKT1 (buzzer)
-      if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
-        processPacket(vReal, (PacketResult&)pkt1_result, freq_0_pkt1, freq_1_pkt1, PACKET_LEN_PKT1, MESSAGE_LEN_PKT1, expected_confirmation_bits_pkt1, "PKT1", CONF_LEN_PKT1, true, false);
-        xSemaphoreGive(xMutex);
-      }
-      
-      // Demodular PKT2 (ASCII) - sin delay
-      if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
-        processPacket(vReal, (PacketResult&)pkt2_result, freq_0_pkt2, freq_1_pkt2, PACKET_LEN_PKT2, MESSAGE_LEN_PKT2, expected_confirmation_bits_pkt2, "PKT2", CONF_LEN_PKT2, true, false);
-        xSemaphoreGive(xMutex);
-      }
-      
-      // Si PKT1 es válido, guardarlo para reproducción en bucle
-      if (pkt1_result.valid && !pkt1_received) {
-        saved_pkt1_length = pkt1_result.msg_len;
-        for (int i = 0; i < saved_pkt1_length; i++) {
-          saved_pkt1_message[i] = pkt1_result.message[i];
-        }
-        pkt1_received = true;
-        Serial.println("\n[PKT1] Guardado! Reproduciendo en bucle...");
-      }
-      
-      // Si PKT2 es válido, mostrar ASCII en TFT
-      if (pkt2_result.valid) {
-        tft.fillScreen(ST77XX_BLACK);
-        tft.setTextSize(1);
-        tft.setTextColor(ST77XX_CYAN);
-        tft.setCursor(2, 2);
-        tft.println("FSK Receptor");
-        
-        tft.setTextColor(ST77XX_YELLOW);
-        tft.setCursor(2, 16);
-        tft.print("PKT2 (");
-        tft.print(freq_0_pkt2);
-        tft.print("/");
-        tft.print(freq_1_pkt2);
-        tft.println("Hz)");
-        
-        tft.setTextColor(ST77XX_GREEN);
-        tft.setCursor(2, 28);
-        tft.print("Bits: ");
-        for (int i = 0; i < pkt2_result.msg_len; i++) {
-          tft.print(pkt2_result.message[i]);
+      // Alternar entre PKT1 y PKT2 según lo que estemos esperando
+      if (waiting_for_pkt1) {
+        // Intentar demodular PKT1
+        if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+          processPacket(vReal, (PacketResult&)pkt1_result, freq_0_pkt1, freq_1_pkt1, PACKET_LEN_PKT1, MESSAGE_LEN_PKT1, expected_confirmation_bits_pkt1, "PKT1", CONF_LEN_PKT1, true, false);
+          xSemaphoreGive(xMutex);
         }
         
-        tft.setCursor(2, 40);
-        tft.print("ASCII: '");
-        uint8_t val = 0;
-        for (int i = 0; i < pkt2_result.msg_len; i++) {
-          val = (val << 1) | pkt2_result.message[i];
+        // Si PKT1 es válido, guardarlo y cambiar a esperar PKT2
+        if (pkt1_result.valid) {
+          if (!pkt1_received) {
+            saved_pkt1_length = pkt1_result.msg_len;
+            for (int i = 0; i < saved_pkt1_length; i++) {
+              saved_pkt1_message[i] = pkt1_result.message[i];
+            }
+            pkt1_received = true;
+            Serial.println("[PKT1] Guardado! Reproduciendo en bucle...");
+          }
+          Serial.println("[SISTEMA] PKT1 OK -> Esperando PKT2...");
+          waiting_for_pkt1 = false;  // Cambiar a esperar PKT2
+          
+          // Delay para sincronizar con el siguiente paquete del transmisor
+          delay(200);  // Esperar a que termine PKT1 y empiece PKT2
+          
+          // Mostrar espectrograma PKT1 en TFT
+          tft.fillScreen(ST77XX_BLACK);
+          tft.setTextSize(1);
+          tft.setTextColor(ST77XX_CYAN);
+          tft.setCursor(2, 2);
+          tft.println("PKT1 Recibido");
+          
+          tft.setTextColor(ST77XX_GREEN);
+          tft.setCursor(2, 14);
+          tft.print("Msg: ");
+          for (int i = 0; i < pkt1_result.msg_len; i++) {
+            tft.print(pkt1_result.message[i]);
+          }
+          
+          tft.setTextColor(ST77XX_WHITE);
+          tft.setCursor(2, 26);
+          tft.println("Espectrograma:");
+          for (int i = 0; i < 8 && i < pkt1_result.pkt_len; i++) {
+            tft.setCursor(2, 38 + i * 10);
+            tft.print(i);
+            tft.print(":");
+            tft.print((int)pkt1_result.mags0[i]);
+            tft.print("/");
+            tft.print((int)pkt1_result.mags1[i]);
+            tft.print("=");
+            tft.print(pkt1_result.full_packet[i]);
+          }
         }
-        tft.print((char)val);
-        tft.print("' (");
-        tft.print(val);
-        tft.println(")");
+      } else {
+        // Intentar demodular PKT2 (ahora con checksum de 4 bits)
+        if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+          processPacket(vReal, (PacketResult&)pkt2_result, freq_0_pkt2, freq_1_pkt2, PACKET_LEN_PKT2, MESSAGE_LEN_PKT2, expected_confirmation_bits_pkt2, "PKT2", CONF_LEN_PKT2, true, false);
+          xSemaphoreGive(xMutex);
+        }
         
-        tft.setTextColor(ST77XX_WHITE);
-        tft.setCursor(2, 54);
-        tft.print("Paquete:");
-        tft.setCursor(2, 64);
-        for (int i = 0; i < pkt2_result.pkt_len && i < 13; i++) {
-          tft.print(pkt2_result.full_packet[i]);
+        // Si PKT2 es válido, validar que el carácter esté en el rango permitido
+        if (pkt2_result.valid) {
+          // Decodificar el valor ASCII de los 8 bits
+          uint8_t ascii_val = 0;
+          for (int i = 0; i < pkt2_result.msg_len; i++) {
+            ascii_val = (ascii_val << 1) | pkt2_result.message[i];
+          }
+          
+          // Validar que sea '0'-'9' (48-57) o 'A'-'D' (65-68)
+          bool valid_char = (ascii_val >= 48 && ascii_val <= 57) || (ascii_val >= 65 && ascii_val <= 68);
+          
+          if (!valid_char) {
+            Serial.print("[PKT2] Carácter inválido: '");
+            Serial.print((char)ascii_val);
+            Serial.print("' (");
+            Serial.print(ascii_val);
+            Serial.println(") - Solo se aceptan 0-9 o A-D");
+            // No marcar como válido y continuar esperando
+          } else {
+            Serial.print("[SISTEMA] PKT2 OK (");
+            Serial.print((char)ascii_val);
+            Serial.println(") -> Volviendo a esperar PKT1...");
+            pkt2_received = true;
+            waiting_for_pkt1 = true;  // Volver a esperar PKT1
+            
+            // Delay para sincronizar con el siguiente paquete del transmisor
+            delay(200);  // Esperar a que termine PKT2 y empiece PKT1
+            
+            // Mostrar ASCII y espectrograma PKT2 en TFT
+            tft.fillScreen(ST77XX_BLACK);
+            tft.setTextSize(1);
+            tft.setTextColor(ST77XX_CYAN);
+            tft.setCursor(2, 2);
+            tft.println("PKT2 ASCII");
+            
+            tft.setTextColor(ST77XX_YELLOW);
+            tft.setCursor(2, 14);
+            tft.print("Bits: ");
+            for (int i = 0; i < pkt2_result.msg_len; i++) {
+              tft.print(pkt2_result.message[i]);
+            }
+            
+            tft.setCursor(2, 26);
+            tft.print("ASCII: '");
+            tft.print((char)ascii_val);
+            tft.print("' (");
+            tft.print(ascii_val);
+            tft.print(")");
+            
+            tft.setTextColor(ST77XX_WHITE);
+            tft.setCursor(2, 38);
+            tft.println("Espectrograma:");
+            for (int i = 0; i < 10 && i < pkt2_result.pkt_len; i++) {
+              tft.setCursor(2, 50 + i * 10);
+              tft.print(i);
+              tft.print(":");
+              tft.print((int)pkt2_result.mags0[i]);
+              tft.print("/");
+              tft.print((int)pkt2_result.mags1[i]);
+              tft.print("=");
+              tft.print(pkt2_result.full_packet[i]);
+            }
+          }
         }
       }
       
-      current_state = WAITING_FOR_SIGNAL;
+      // Volver directamente a SAMPLING para recibir el siguiente paquete rápidamente
+      current_state = SAMPLING;
     }
     
     vTaskDelay(1 / portTICK_PERIOD_MS);

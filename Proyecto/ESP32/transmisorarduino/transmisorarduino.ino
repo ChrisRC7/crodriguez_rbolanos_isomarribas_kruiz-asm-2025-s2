@@ -31,7 +31,7 @@ const int MESSAGE_LEN_PKT1 = 4;
 const int PACKET_LEN_PKT1 = 13;  // 1 sync + 4 mensaje + 4 confirmación + 4 checksum
 
 // --- Componentes del Paquete 2 (Carácter ASCII) ---
-char ascii_char = '5'; // Carácter a enviar (cualquier ASCII)
+char ascii_char = 'A'; // Carácter a enviar (cualquier ASCII)
 uint8_t data_message_pkt2[8];  // 8 bits para ASCII completo
 const uint8_t confirmation_bits_pkt2[4] = {1, 0, 1, 0};
 const int MESSAGE_LEN_PKT2 = 8;

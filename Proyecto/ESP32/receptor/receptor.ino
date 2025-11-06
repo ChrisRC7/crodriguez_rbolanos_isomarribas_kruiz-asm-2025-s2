@@ -30,9 +30,9 @@ const uint8_t expected_confirmation_bits_pkt1[4] = {1, 0, 1, 0};
 const uint8_t expected_confirmation_bits_pkt2[4] = {1, 0, 1, 0};
 
 // --- Buzzer Config ---
-const int BUZZER_FREQ = 2000;
-const int BIT_SOUND_DURATION = 100;
-const int BIT_PAUSE_DURATION = 100;
+const int BUZZER_FREQ = 2000;    // Frecuencia del tono (Hz)
+const int BIT_SOUND_DURATION = 100;  // Duración del sonido por bit 1 (ms)
+const int BIT_PAUSE_DURATION = 100;  // Duración del silencio por bit 0 (ms)
 
 // --- Variables para reproducción en bucle ---
 volatile bool pkt1_received = false;

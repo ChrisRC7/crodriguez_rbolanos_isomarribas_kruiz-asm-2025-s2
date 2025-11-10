@@ -334,25 +334,11 @@ int bitsToFrequency(const uint8_t* bits, int length) {
   return frequency;
 }
 
-// --- Tabla de lookup para generar señal seno ---
-const int SINE_TABLE_SIZE = 256;
-uint8_t sineTable[SINE_TABLE_SIZE];
-
-void generateSineTable() {
-  for (int i = 0; i < SINE_TABLE_SIZE; i++) {
-    // Generar valores de 0-255 (rango del DAC de 8 bits)
-    sineTable[i] = (uint8_t)(127.5 + 127.5 * sin(2.0 * PI * i / SINE_TABLE_SIZE));
-  }
-}
-
 void setup() {
   Serial.begin(115200);
   delay(1500);
   pinMode(ADC_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
-  
-  // Generar tabla de seno
-  generateSineTable();
   
   Serial.println("\n========================================");
   Serial.println("  Receptor FSK Dual-Core");
@@ -740,31 +726,30 @@ void core0Task(void * pvParameters) {
 void buzzerTask(void * pvParameters) {
   Serial.println("[Sine Wave Task] Iniciado en Core 1");
   
-  // Variables para generación de onda
-  unsigned long phase_accumulator = 0;
-  unsigned long last_update = 0;
+  const int sampleRate = 8000; // Frecuencia de muestreo (8 kHz) - igual que tu código
+  const unsigned long samplePeriodUs = 1000000 / sampleRate; // Microsegundos entre muestras
   
   while(1) {
     if (pkt1_received && target_frequency > 0) {
-      // Generar señal seno continua usando DAC
-      unsigned long current_micros = micros();
+      // Generar señal seno continua igual que tu código de referencia
+      float freq = (float)target_frequency;
       
-      // Calcular incremento de fase basado en la frecuencia objetivo
-      // phase_increment = (frecuencia * SINE_TABLE_SIZE * 2^32) / sample_rate
-      // Asumiendo sample_rate ~40kHz (25us por muestra)
-      unsigned long phase_increment = ((unsigned long long)target_frequency * SINE_TABLE_SIZE * 4294967296ULL) / 40000UL;
+      // Número de muestras por ciclo completo
+      int samplesPerCycle = sampleRate / freq;
       
-      // Actualizar fase
-      phase_accumulator += phase_increment;
-      
-      // Obtener índice de la tabla (usar los 8 bits más significativos)
-      int table_index = (phase_accumulator >> 24) & 0xFF;
-      
-      // Escribir al DAC (pin 25 en ESP32 tiene DAC)
-      dacWrite(BUZZER_PIN, sineTable[table_index]);
-      
-      // Control de timing para mantener ~40kHz de tasa de muestreo
-      delayMicroseconds(25);
+      for (int i = 0; i < samplesPerCycle; i++) {
+        // Verificar si la frecuencia cambió
+        if (!pkt1_received || target_frequency <= 0) {
+          break;
+        }
+        
+        // Generar onda seno (igual que tu código de referencia)
+        float sample = (sin(2.0 * PI * freq * i / sampleRate) + 1.0) * 127.5;
+        dacWrite(BUZZER_PIN, (uint8_t)sample);
+        
+        // Esperar el período de muestreo
+        delayMicroseconds(samplePeriodUs);
+      }
       
     } else {
       // No hay frecuencia, silencio

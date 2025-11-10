@@ -38,9 +38,9 @@ const int BIT_PAUSE_DURATION = 100;  // Duración del silencio por bit 0 (ms)
 volatile bool pkt1_received = false;
 uint8_t saved_pkt1_message[8];
 int saved_pkt1_length = 0;
+volatile int target_frequency = 0;  // Frecuencia objetivo en Hz
 
-// --- Control de alternancia de paquetes ---
-volatile bool waiting_for_pkt1 = true;  // Empezamos esperando PKT1
+// --- Control de paquetes (ahora recibe ambos simultáneamente) ---
 volatile bool pkt2_received = false;
 
 // --- Buffers Compartidos ---
@@ -66,8 +66,8 @@ const int CALIBRATION_SAMPLES = 2048;  // ~256ms de muestreo @ 8kHz
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 // --- Máquina de Estados ---
-enum State { CALIBRATING, WAITING_FOR_SIGNAL, SAMPLING, DEMODULATING };
-volatile State current_state = CALIBRATING;
+enum State { WAITING_FOR_R, CALIBRATING, WAITING_FOR_SIGNAL, SAMPLING, DEMODULATING };
+volatile State current_state = CALIBRATING;  // Iniciar directamente en calibración
 const double SIGNAL_THRESHOLD = 200.0;
 
 // --- Mutex para proteger acceso a buffers ---
@@ -86,6 +86,9 @@ struct PacketResult {
 
 volatile PacketResult pkt1_result;
 volatile PacketResult pkt2_result;
+
+// --- Recalibración bajo demanda ---
+volatile bool recalibrate_requested = false;
 
 
 // --- Función para detectar frecuencia durante calibración ---
@@ -237,27 +240,6 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
     parity_ok = (ones_count % 2 == 0);
   }
   
-  // Solo mostrar debug si falló la validación (opcional, puedes comentar esta sección)
-  /*
-  if (!confirmation_ok || !checksum_ok || !parity_ok) {
-    Serial.print("[");
-    Serial.print(pkt_name);
-    Serial.print("] Validación fallida - Conf:");
-    Serial.print(confirmation_ok ? "OK" : "FAIL");
-    if (validate_checksum) {
-      Serial.print(" Chk:");
-      Serial.print(checksum_ok ? "OK" : "FAIL");
-    }
-    if (validate_parity) {
-      Serial.print(" Par:");
-      Serial.print(parity_ok ? "OK" : "FAIL");
-    }
-    Serial.print(" Pkt:");
-    for(int i=0; i<pkt_len && i<13; i++) Serial.print(received_packet[i]);
-    if(pkt_len > 13) Serial.print("...");
-    Serial.println();
-  }
-  */
   
   if (confirmation_ok && checksum_ok && parity_ok) {
     result.valid = true;
@@ -313,22 +295,21 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
 }  return false;
 }
 
-// --- Función para reproducir el mensaje en el buzzer ---
-void playMessageOnBuzzer(const uint8_t* message, int length, const char* label) {
-  Serial.print("\n[Buzzer] ");
-  Serial.println(label);
-  
+// --- Función para convertir 4 bits a frecuencia ---
+int bitsToFrequency(const uint8_t* bits, int length) {
+  // Convertir bits a valor decimal (0-15 para 4 bits)
+  int value = 0;
   for (int i = 0; i < length; i++) {
-    if (message[i] == 1) {
-      tone(BUZZER_PIN, BUZZER_FREQ, BIT_SOUND_DURATION);
-      delay(BIT_SOUND_DURATION);
-    } else {
-      noTone(BUZZER_PIN);
-      delay(BIT_SOUND_DURATION);
-    }
-    noTone(BUZZER_PIN);
-    delay(BIT_PAUSE_DURATION);
+    value = (value << 1) | bits[i];
   }
+  
+  // Mapear valores 0-15 a frecuencias entre 200Hz y 3000Hz
+  // Puedes ajustar este rango según necesites
+  int base_freq = 200;
+  int freq_step = 200;  // Incrementos de 200Hz
+  int frequency = base_freq + (value * freq_step);
+  
+  return frequency;
 }
 
 void setup() {
@@ -339,7 +320,8 @@ void setup() {
   
   Serial.println("\n========================================");
   Serial.println("  Receptor FSK Dual-Core");
-  Serial.println("  Iniciando calibracion automatica...");
+  Serial.println("  Iniciando CALIBRACION automatica...");
+  Serial.println("  (presiona 'R' en cualquier momento para recalibrar)");
   Serial.println("========================================");
 
   tft.initR(INITR_BLACKTAB);
@@ -356,9 +338,10 @@ void setup() {
   xMutex = xSemaphoreCreateMutex();
   
   xTaskCreatePinnedToCore(core0Task, "Core0", 10000, NULL, 1, NULL, 0);
-  xTaskCreatePinnedToCore(buzzerTask, "Buzzer", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(buzzerTask, "SineWave", 4096, NULL, 1, NULL, 1);
   
-  Serial.println("Sistema iniciado - PKT1: Buzzer bucle, PKT2: ASCII");
+  Serial.println("Sistema iniciado - PKT1: Frecuencia continua, PKT2: ASCII");
+  Serial.println("Presiona 'R' para recalibrar en cualquier momento.");
 }
 
 // --- Mostrar en TFT cuando el mensaje es válido ---
@@ -435,6 +418,30 @@ void core0Task(void * pvParameters) {
   Serial.println("[Core 0] Iniciado");
   
   while(1) {
+    // Lectura no bloqueante de Serial para 'R'
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == 'R' || c == 'r') {
+        recalibrate_requested = true;
+      }
+    }
+
+    if (recalibrate_requested) {
+      // Reset variables para recalibrar
+      calibration_step = 0;
+      calibration_mode = true;
+      frequencies_detected = false;
+      pkt1_received = false;
+      pkt2_received = false;
+      pkt1_result.valid = false;
+      pkt2_result.valid = false;
+      current_state = CALIBRATING;
+      recalibrate_requested = false;
+      Serial.println("\n[Recalibracion] Iniciando proceso de calibracion...");
+      tft.fillScreen(ST77XX_BLACK);
+      tft.setCursor(2,2); tft.println("Recalibrando...");
+    }
+
     if (current_state == CALIBRATING) {
       // Modo calibración: capturar 8 tonos de 3 segundos cada uno
       if (calibration_step < 8) {
@@ -545,129 +552,68 @@ void core0Task(void * pvParameters) {
       }
     }
     else if (current_state == DEMODULATING) {
-      // Alternar entre PKT1 y PKT2 según lo que estemos esperando
-      if (waiting_for_pkt1) {
-        // Intentar demodular PKT1
-        if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
-          processPacket(vReal, (PacketResult&)pkt1_result, freq_0_pkt1, freq_1_pkt1, PACKET_LEN_PKT1, MESSAGE_LEN_PKT1, expected_confirmation_bits_pkt1, "PKT1", CONF_LEN_PKT1, true, false);
-          xSemaphoreGive(xMutex);
+      // Intentar demodular AMBOS paquetes en cada ciclo
+      
+      // Demodular PKT1
+      if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+        processPacket(vReal, (PacketResult&)pkt1_result, freq_0_pkt1, freq_1_pkt1, PACKET_LEN_PKT1, MESSAGE_LEN_PKT1, expected_confirmation_bits_pkt1, "PKT1", CONF_LEN_PKT1, true, false);
+        xSemaphoreGive(xMutex);
+      }
+      
+      // Si PKT1 es válido, guardarlo y reproducir continuamente
+      if (pkt1_result.valid) {
+        saved_pkt1_length = pkt1_result.msg_len;
+        for (int i = 0; i < saved_pkt1_length; i++) {
+          saved_pkt1_message[i] = pkt1_result.message[i];
         }
         
-        // Si PKT1 es válido, guardarlo y cambiar a esperar PKT2
-        if (pkt1_result.valid) {
-          if (!pkt1_received) {
-            saved_pkt1_length = pkt1_result.msg_len;
-            for (int i = 0; i < saved_pkt1_length; i++) {
-              saved_pkt1_message[i] = pkt1_result.message[i];
-            }
-            pkt1_received = true;
-            Serial.println("[PKT1] Guardado! Reproduciendo en bucle...");
-          }
-          Serial.println("[SISTEMA] PKT1 OK -> Esperando PKT2...");
-          waiting_for_pkt1 = false;  // Cambiar a esperar PKT2
-          
-          // Delay para sincronizar con el siguiente paquete del transmisor
-          delay(200);  // Esperar a que termine PKT1 y empiece PKT2
-          
-          // Mostrar espectrograma PKT1 en TFT
-          tft.fillScreen(ST77XX_BLACK);
-          tft.setTextSize(1);
-          tft.setTextColor(ST77XX_CYAN);
-          tft.setCursor(2, 2);
-          tft.println("PKT1 Recibido");
-          
-          tft.setTextColor(ST77XX_GREEN);
-          tft.setCursor(2, 14);
-          tft.print("Msg: ");
-          for (int i = 0; i < pkt1_result.msg_len; i++) {
-            tft.print(pkt1_result.message[i]);
-          }
-          
-          tft.setTextColor(ST77XX_WHITE);
-          tft.setCursor(2, 26);
-          tft.println("Espectrograma:");
-          for (int i = 0; i < 8 && i < pkt1_result.pkt_len; i++) {
-            tft.setCursor(2, 38 + i * 10);
-            tft.print(i);
-            tft.print(":");
-            tft.print((int)pkt1_result.mags0[i]);
-            tft.print("/");
-            tft.print((int)pkt1_result.mags1[i]);
-            tft.print("=");
-            tft.print(pkt1_result.full_packet[i]);
-          }
+        // Convertir bits a frecuencia
+        target_frequency = bitsToFrequency(saved_pkt1_message, saved_pkt1_length);
+        pkt1_received = true;
+        
+        Serial.print("[PKT1] Guardado! Bits: ");
+        for (int i = 0; i < saved_pkt1_length; i++) {
+          Serial.print(saved_pkt1_message[i]);
         }
-      } else {
-        // Intentar demodular PKT2 (ahora con checksum de 4 bits)
-        if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
-          processPacket(vReal, (PacketResult&)pkt2_result, freq_0_pkt2, freq_1_pkt2, PACKET_LEN_PKT2, MESSAGE_LEN_PKT2, expected_confirmation_bits_pkt2, "PKT2", CONF_LEN_PKT2, true, false);
-          xSemaphoreGive(xMutex);
+        Serial.print(" -> Frecuencia: ");
+        Serial.print(target_frequency);
+        Serial.println(" Hz (reproduciendo continuamente)");
+      }
+      
+      // Demodular PKT2
+      if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+        processPacket(vReal, (PacketResult&)pkt2_result, freq_0_pkt2, freq_1_pkt2, PACKET_LEN_PKT2, MESSAGE_LEN_PKT2, expected_confirmation_bits_pkt2, "PKT2", CONF_LEN_PKT2, true, false);
+        xSemaphoreGive(xMutex);
+      }
+      
+      // Si PKT2 es válido, validar que el carácter esté en el rango permitido
+      if (pkt2_result.valid) {
+        // Decodificar el valor ASCII de los 8 bits
+        uint8_t ascii_val = 0;
+        for (int i = 0; i < pkt2_result.msg_len; i++) {
+          ascii_val = (ascii_val << 1) | pkt2_result.message[i];
         }
         
-        // Si PKT2 es válido, validar que el carácter esté en el rango permitido
-        if (pkt2_result.valid) {
-          // Decodificar el valor ASCII de los 8 bits
-          uint8_t ascii_val = 0;
-          for (int i = 0; i < pkt2_result.msg_len; i++) {
-            ascii_val = (ascii_val << 1) | pkt2_result.message[i];
-          }
-          
-          // Validar que sea '0'-'9' (48-57) o 'A'-'D' (65-68)
-          bool valid_char = (ascii_val >= 48 && ascii_val <= 57) || (ascii_val >= 65 && ascii_val <= 68);
-          
-          if (!valid_char) {
-            Serial.print("[PKT2] Carácter inválido: '");
-            Serial.print((char)ascii_val);
-            Serial.print("' (");
-            Serial.print(ascii_val);
-            Serial.println(") - Solo se aceptan 0-9 o A-D");
-            // No marcar como válido y continuar esperando
-          } else {
-            Serial.print("[SISTEMA] PKT2 OK (");
-            Serial.print((char)ascii_val);
-            Serial.println(") -> Volviendo a esperar PKT1...");
-            pkt2_received = true;
-            waiting_for_pkt1 = true;  // Volver a esperar PKT1
-            
-            // Delay para sincronizar con el siguiente paquete del transmisor
-            delay(200);  // Esperar a que termine PKT2 y empiece PKT1
-            
-            // Mostrar ASCII y espectrograma PKT2 en TFT
-            tft.fillScreen(ST77XX_BLACK);
-            tft.setTextSize(1);
-            tft.setTextColor(ST77XX_CYAN);
-            tft.setCursor(2, 2);
-            tft.println("PKT2 ASCII");
-            
-            tft.setTextColor(ST77XX_YELLOW);
-            tft.setCursor(2, 14);
-            tft.print("Bits: ");
-            for (int i = 0; i < pkt2_result.msg_len; i++) {
-              tft.print(pkt2_result.message[i]);
-            }
-            
-            tft.setCursor(2, 26);
-            tft.print("ASCII: '");
-            tft.print((char)ascii_val);
-            tft.print("' (");
-            tft.print(ascii_val);
-            tft.print(")");
-            
-            tft.setTextColor(ST77XX_WHITE);
-            tft.setCursor(2, 38);
-            tft.println("Espectrograma:");
-            for (int i = 0; i < 10 && i < pkt2_result.pkt_len; i++) {
-              tft.setCursor(2, 50 + i * 10);
-              tft.print(i);
-              tft.print(":");
-              tft.print((int)pkt2_result.mags0[i]);
-              tft.print("/");
-              tft.print((int)pkt2_result.mags1[i]);
-              tft.print("=");
-              tft.print(pkt2_result.full_packet[i]);
-            }
-          }
+        // Validar que sea '0'-'9' (48-57) o 'A'-'D' (65-68)
+        bool valid_char = (ascii_val >= 48 && ascii_val <= 57) || (ascii_val >= 65 && ascii_val <= 68);
+        
+        if (!valid_char) {
+          Serial.print("[PKT2] Carácter inválido: '");
+          Serial.print((char)ascii_val);
+          Serial.print("' (");
+          Serial.print(ascii_val);
+          Serial.println(") - Solo se aceptan 0-9 o A-D");
+        } else {
+          Serial.print("[PKT2] Recibido carácter válido: '");
+          Serial.print((char)ascii_val);
+          Serial.println("'");
+          pkt2_received = true;
         }
+      }
+      
+      // Mostrar ambos paquetes en TFT si hay datos válidos
+      if (pkt1_result.valid || pkt2_result.valid) {
+        tftShowDualPackets();
       }
       
       // Volver directamente a SAMPLING para recibir el siguiente paquete rápidamente
@@ -679,27 +625,37 @@ void core0Task(void * pvParameters) {
 }
 
 void buzzerTask(void * pvParameters) {
-  Serial.println("[Buzzer Task] Iniciado en Core 1");
+  Serial.println("[Sine Wave Task] Iniciado en Core 1");
+  
+  const int sampleRate = 8000; // Frecuencia de muestreo (8 kHz) - igual que tu código
+  const unsigned long samplePeriodUs = 1000000 / sampleRate; // Microsegundos entre muestras
   
   while(1) {
-    if (pkt1_received) {
-      // Reproducir el mensaje guardado en bucle infinito
-      for (int i = 0; i < saved_pkt1_length; i++) {
-        if (saved_pkt1_message[i] == 1) {
-          tone(BUZZER_PIN, BUZZER_FREQ, BIT_SOUND_DURATION);
-          delay(BIT_SOUND_DURATION);
-        } else {
-          noTone(BUZZER_PIN);
-          delay(BIT_SOUND_DURATION);
+    if (pkt1_received && target_frequency > 0) {
+      // Generar señal seno continua igual que tu código de referencia
+      float freq = (float)target_frequency;
+      
+      // Número de muestras por ciclo completo
+      int samplesPerCycle = sampleRate / freq;
+      
+      for (int i = 0; i < samplesPerCycle; i++) {
+        // Verificar si la frecuencia cambió
+        if (!pkt1_received || target_frequency <= 0) {
+          break;
         }
-        noTone(BUZZER_PIN);
-        delay(BIT_PAUSE_DURATION);
+        
+        // Generar onda seno (igual que tu código de referencia)
+        float sample = (sin(2.0 * PI * freq * i / sampleRate) + 1.0) * 127.5;
+        dacWrite(BUZZER_PIN, (uint8_t)sample);
+        
+        // Esperar el período de muestreo
+        delayMicroseconds(samplePeriodUs);
       }
-      // Pausa entre repeticiones
-      delay(500);
+      
     } else {
-      // Esperar hasta que se reciba PKT1
-      delay(100);
+      // No hay frecuencia, silencio
+      dacWrite(BUZZER_PIN, 128);  // Valor medio (sin señal)
+      delay(10);
     }
   }
 }

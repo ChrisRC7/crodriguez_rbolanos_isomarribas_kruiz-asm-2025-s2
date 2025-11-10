@@ -38,6 +38,7 @@ const int BIT_PAUSE_DURATION = 100;  // Duración del silencio por bit 0 (ms)
 volatile bool pkt1_received = false;
 uint8_t saved_pkt1_message[8];
 int saved_pkt1_length = 0;
+volatile int target_frequency = 0;  // Frecuencia objetivo en Hz
 
 // --- Control de alternancia de paquetes ---
 volatile bool waiting_for_pkt1 = true;  // Empezamos esperando PKT1
@@ -66,8 +67,8 @@ const int CALIBRATION_SAMPLES = 2048;  // ~256ms de muestreo @ 8kHz
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 // --- Máquina de Estados ---
-enum State { CALIBRATING, WAITING_FOR_SIGNAL, SAMPLING, DEMODULATING };
-volatile State current_state = CALIBRATING;
+enum State { WAITING_FOR_R, CALIBRATING, WAITING_FOR_SIGNAL, SAMPLING, DEMODULATING };
+volatile State current_state = WAITING_FOR_R;
 const double SIGNAL_THRESHOLD = 200.0;
 
 // --- Mutex para proteger acceso a buffers ---
@@ -86,6 +87,9 @@ struct PacketResult {
 
 volatile PacketResult pkt1_result;
 volatile PacketResult pkt2_result;
+
+// --- Recalibración bajo demanda ---
+volatile bool recalibrate_requested = false;
 
 
 // --- Función para detectar frecuencia durante calibración ---
@@ -238,7 +242,7 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
   }
   
   // Solo mostrar debug si falló la validación (opcional, puedes comentar esta sección)
-  /*
+  
   if (!confirmation_ok || !checksum_ok || !parity_ok) {
     Serial.print("[");
     Serial.print(pkt_name);
@@ -257,7 +261,7 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
     if(pkt_len > 13) Serial.print("...");
     Serial.println();
   }
-  */
+  
   
   if (confirmation_ok && checksum_ok && parity_ok) {
     result.valid = true;
@@ -313,21 +317,31 @@ bool processPacket(const double* signal, PacketResult& result, int f0, int f1, i
 }  return false;
 }
 
-// --- Función para reproducir el mensaje en el buzzer ---
-void playMessageOnBuzzer(const uint8_t* message, int length, const char* label) {
-  Serial.print("\n[Buzzer] ");
-  Serial.println(label);
-  
+// --- Función para convertir 4 bits a frecuencia ---
+int bitsToFrequency(const uint8_t* bits, int length) {
+  // Convertir bits a valor decimal (0-15 para 4 bits)
+  int value = 0;
   for (int i = 0; i < length; i++) {
-    if (message[i] == 1) {
-      tone(BUZZER_PIN, BUZZER_FREQ, BIT_SOUND_DURATION);
-      delay(BIT_SOUND_DURATION);
-    } else {
-      noTone(BUZZER_PIN);
-      delay(BIT_SOUND_DURATION);
-    }
-    noTone(BUZZER_PIN);
-    delay(BIT_PAUSE_DURATION);
+    value = (value << 1) | bits[i];
+  }
+  
+  // Mapear valores 0-15 a frecuencias entre 200Hz y 3000Hz
+  // Puedes ajustar este rango según necesites
+  int base_freq = 200;
+  int freq_step = 200;  // Incrementos de 200Hz
+  int frequency = base_freq + (value * freq_step);
+  
+  return frequency;
+}
+
+// --- Tabla de lookup para generar señal seno ---
+const int SINE_TABLE_SIZE = 256;
+uint8_t sineTable[SINE_TABLE_SIZE];
+
+void generateSineTable() {
+  for (int i = 0; i < SINE_TABLE_SIZE; i++) {
+    // Generar valores de 0-255 (rango del DAC de 8 bits)
+    sineTable[i] = (uint8_t)(127.5 + 127.5 * sin(2.0 * PI * i / SINE_TABLE_SIZE));
   }
 }
 
@@ -337,9 +351,13 @@ void setup() {
   pinMode(ADC_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   
+  // Generar tabla de seno
+  generateSineTable();
+  
   Serial.println("\n========================================");
   Serial.println("  Receptor FSK Dual-Core");
-  Serial.println("  Iniciando calibracion automatica...");
+  Serial.println("  Esperando 'R' para iniciar CALIBRACION");
+  Serial.println("  (en cualquier momento presiona 'R' para recalibrar)");
   Serial.println("========================================");
 
   tft.initR(INITR_BLACKTAB);
@@ -351,14 +369,15 @@ void setup() {
   tft.setCursor(4, 4);
   tft.println("ESP32 Receptor Dual");
   tft.setCursor(4, 16);
-  tft.println("Calibrando...");
+  tft.println("Esperando 'R'...");
   
   xMutex = xSemaphoreCreateMutex();
   
   xTaskCreatePinnedToCore(core0Task, "Core0", 10000, NULL, 1, NULL, 0);
-  xTaskCreatePinnedToCore(buzzerTask, "Buzzer", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(buzzerTask, "SineWave", 4096, NULL, 1, NULL, 1);
   
-  Serial.println("Sistema iniciado - PKT1: Buzzer bucle, PKT2: ASCII");
+  Serial.println("Sistema iniciado - PKT1: Frecuencia continua, PKT2: ASCII");
+  Serial.println("Use 'R' para calibrar.");
 }
 
 // --- Mostrar en TFT cuando el mensaje es válido ---
@@ -435,6 +454,37 @@ void core0Task(void * pvParameters) {
   Serial.println("[Core 0] Iniciado");
   
   while(1) {
+    // Lectura no bloqueante de Serial para 'R'
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == 'R' || c == 'r') {
+        recalibrate_requested = true;
+      }
+    }
+
+    if (recalibrate_requested) {
+      // Reset variables para recalibrar
+      calibration_step = 0;
+      calibration_mode = true;
+      frequencies_detected = false;
+      waiting_for_pkt1 = true;
+      pkt1_received = false;
+      pkt2_received = false;
+      pkt1_result.valid = false;
+      pkt2_result.valid = false;
+      current_state = CALIBRATING;
+      recalibrate_requested = false;
+      Serial.println("\n[Recalibracion] Iniciando proceso de calibracion...");
+      tft.fillScreen(ST77XX_BLACK);
+      tft.setCursor(2,2); tft.println("Recalibrando...");
+    }
+
+    if (current_state == WAITING_FOR_R) {
+      // Sólo esperar a que el usuario pida calibración (recalibrate_requested lo activa)
+      vTaskDelay(50 / portTICK_PERIOD_MS);
+      continue;
+    }
+
     if (current_state == CALIBRATING) {
       // Modo calibración: capturar 8 tonos de 3 segundos cada uno
       if (calibration_step < 8) {
@@ -555,14 +605,23 @@ void core0Task(void * pvParameters) {
         
         // Si PKT1 es válido, guardarlo y cambiar a esperar PKT2
         if (pkt1_result.valid) {
-          if (!pkt1_received) {
-            saved_pkt1_length = pkt1_result.msg_len;
-            for (int i = 0; i < saved_pkt1_length; i++) {
-              saved_pkt1_message[i] = pkt1_result.message[i];
-            }
-            pkt1_received = true;
-            Serial.println("[PKT1] Guardado! Reproduciendo en bucle...");
+          saved_pkt1_length = pkt1_result.msg_len;
+          for (int i = 0; i < saved_pkt1_length; i++) {
+            saved_pkt1_message[i] = pkt1_result.message[i];
           }
+          
+          // Convertir bits a frecuencia
+          target_frequency = bitsToFrequency(saved_pkt1_message, saved_pkt1_length);
+          pkt1_received = true;
+          
+          Serial.print("[PKT1] Guardado! Bits: ");
+          for (int i = 0; i < saved_pkt1_length; i++) {
+            Serial.print(saved_pkt1_message[i]);
+          }
+          Serial.print(" -> Frecuencia: ");
+          Serial.print(target_frequency);
+          Serial.println(" Hz (reproduciendo continuamente)");
+          
           Serial.println("[SISTEMA] PKT1 OK -> Esperando PKT2...");
           waiting_for_pkt1 = false;  // Cambiar a esperar PKT2
           
@@ -679,27 +738,38 @@ void core0Task(void * pvParameters) {
 }
 
 void buzzerTask(void * pvParameters) {
-  Serial.println("[Buzzer Task] Iniciado en Core 1");
+  Serial.println("[Sine Wave Task] Iniciado en Core 1");
+  
+  // Variables para generación de onda
+  unsigned long phase_accumulator = 0;
+  unsigned long last_update = 0;
   
   while(1) {
-    if (pkt1_received) {
-      // Reproducir el mensaje guardado en bucle infinito
-      for (int i = 0; i < saved_pkt1_length; i++) {
-        if (saved_pkt1_message[i] == 1) {
-          tone(BUZZER_PIN, BUZZER_FREQ, BIT_SOUND_DURATION);
-          delay(BIT_SOUND_DURATION);
-        } else {
-          noTone(BUZZER_PIN);
-          delay(BIT_SOUND_DURATION);
-        }
-        noTone(BUZZER_PIN);
-        delay(BIT_PAUSE_DURATION);
-      }
-      // Pausa entre repeticiones
-      delay(500);
+    if (pkt1_received && target_frequency > 0) {
+      // Generar señal seno continua usando DAC
+      unsigned long current_micros = micros();
+      
+      // Calcular incremento de fase basado en la frecuencia objetivo
+      // phase_increment = (frecuencia * SINE_TABLE_SIZE * 2^32) / sample_rate
+      // Asumiendo sample_rate ~40kHz (25us por muestra)
+      unsigned long phase_increment = ((unsigned long long)target_frequency * SINE_TABLE_SIZE * 4294967296ULL) / 40000UL;
+      
+      // Actualizar fase
+      phase_accumulator += phase_increment;
+      
+      // Obtener índice de la tabla (usar los 8 bits más significativos)
+      int table_index = (phase_accumulator >> 24) & 0xFF;
+      
+      // Escribir al DAC (pin 25 en ESP32 tiene DAC)
+      dacWrite(BUZZER_PIN, sineTable[table_index]);
+      
+      // Control de timing para mantener ~40kHz de tasa de muestreo
+      delayMicroseconds(25);
+      
     } else {
-      // Esperar hasta que se reciba PKT1
-      delay(100);
+      // No hay frecuencia, silencio
+      dacWrite(BUZZER_PIN, 128);  // Valor medio (sin señal)
+      delay(10);
     }
   }
 }

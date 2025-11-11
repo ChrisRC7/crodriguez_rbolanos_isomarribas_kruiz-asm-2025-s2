@@ -115,12 +115,17 @@ class FSK:
         
         # FFT - Espectro de fase
         plt.subplot(3, 2, 5)
-        plt.plot(xf, np.angle(yf), 'g-', linewidth=1)
-        plt.title("Espectro de Fase - Señal Original")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Fase (rad)")
-        plt.grid(True)
-        plt.xlim(0, 3000)
+        ax_phase = plt.gca()
+        ax_phase.plot(xf, np.angle(yf), 'g-', linewidth=1)
+        ax_phase.set_title("Espectro de Fase - Señal Original")
+        ax_phase.set_xlabel("Frecuencia (Hz)")
+        ax_phase.set_ylabel("Fase (rad)")
+        ax_phase.set_xscale('log')
+        ax_phase.set_xlim(0.1, 100)
+        ax_phase.set_xticks([0.1, 1, 10, 100])
+        ax_phase.set_xticklabels(['$10^{-1}$', '$10^{0}$', '$10^{1}$', '$10^{2}$'])
+        ax_phase.grid(True, which='major', alpha=0.4)
+        ax_phase.grid(True, which='minor', alpha=0.15)
         
         # Espectrograma
         plt.subplot(3, 2, 6)
@@ -243,12 +248,17 @@ class FSK:
         
         # FFT - Espectro de fase
         plt.subplot(4, 2, 5)
-        plt.plot(xf, np.angle(yf), 'orange', linewidth=1)
-        plt.title("Espectro de Fase - Señal Modulada")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Fase (rad)")
-        plt.grid(True)
-        plt.xlim(0, max(self.f0, self.f1) * 2.5)
+        ax_phase = plt.gca()
+        ax_phase.plot(xf, np.angle(yf), 'orange', linewidth=1)
+        ax_phase.set_title("Espectro de Fase - Señal Modulada")
+        ax_phase.set_xlabel("Frecuencia (Hz)")
+        ax_phase.set_ylabel("Fase (rad)")
+        ax_phase.set_xscale('log')
+        ax_phase.set_xlim(0.1, 100)
+        ax_phase.set_xticks([0.1, 1, 10, 100])
+        ax_phase.set_xticklabels(['$10^{-1}$', '$10^{0}$', '$10^{1}$', '$10^{2}$'])
+        ax_phase.grid(True, which='major', alpha=0.4)
+        ax_phase.grid(True, which='minor', alpha=0.15)
         
         # Datos binarios solamente
         plt.subplot(4, 2, 6)
@@ -336,12 +346,17 @@ class FSK:
         
         # Espectro de fase
         plt.subplot(2, 1, 2)
-        plt.plot(xf, np.angle(yf))
-        plt.title(f"{titulo} - Fase")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Fase (rad)")
-        plt.grid(True)
-        plt.xlim(0, max(self.f0, self.f1) * 2)
+        ax_phase = plt.gca()
+        ax_phase.plot(xf, np.angle(yf))
+        ax_phase.set_title(f"{titulo} - Fase")
+        ax_phase.set_xlabel("Frecuencia (Hz)")
+        ax_phase.set_ylabel("Fase (rad)")
+        ax_phase.set_xscale('log')
+        ax_phase.set_xlim(0.1, 100)
+        ax_phase.set_xticks([0.1, 1, 10, 100])
+        ax_phase.set_xticklabels(['$10^{-1}$', '$10^{0}$', '$10^{1}$', '$10^{2}$'])
+        ax_phase.grid(True, which='major', alpha=0.4)
+        ax_phase.grid(True, which='minor', alpha=0.15)
         
         plt.tight_layout()
         plt.show()
@@ -508,11 +523,18 @@ class FSK:
         
         # FFT - Espectro de fase
         plt.subplot(3, 2, 5)
-        plt.plot(xf, np.angle(yf), 'cyan', linewidth=1)
-        plt.title("Espectro de Fase - Señal Demodulada")
-        plt.xlabel("Frecuencia (Hz)")
-        plt.ylabel("Fase (rad)")
-        plt.grid(True)
+        ax_phase = plt.gca()
+        ax_phase.plot(xf, np.angle(yf), 'cyan', linewidth=1)
+        ax_phase.set_title("Espectro de Fase - Señal Demodulada")
+        ax_phase.set_xlabel("Frecuencia (Hz)")
+        ax_phase.set_ylabel("Fase (rad)")
+        ax_phase.set_xscale('log')
+        ax_phase.set_xlim(0.1, 100)
+        ax_phase.set_xticks([0.1, 1, 10, 100])
+        ax_phase.set_xticklabels(['$10^{-1}$', '$10^{0}$', '$10^{1}$', '$10^{2}$'])
+        ax_phase.grid(True, which='major', alpha=0.4)
+        ax_phase.grid(True, which='minor', alpha=0.15)
+        
         plt.xlim(0, 3000)
         
         # Espectrograma

@@ -1,6 +1,12 @@
+#include <NewPing.h>
+
 // Pines del sensor ultrasónico HC-SR04
 #define TRIG_PIN 5
 #define ECHO_PIN 18
+#define MAX_DISTANCE 400  // Distancia máxima en cm
+
+// Crear objeto del sensor
+NewPing sonar(TRIG_PIN, ECHO_PIN, MAX_DISTANCE);
 
 // Pines del driver de motor L298N
 #define ENA_PIN 25   // Pin PWM para controlar velocidad
@@ -63,7 +69,12 @@ void loop() {
   lastTime = currentTime;
   
   // Leer distancia del sensor
-  distance = readUltrasonicDistance();
+  distance = sonar.ping_cm();
+  
+  // Si la lectura es 0 (fuera de rango), mantener la última lectura válida
+  if (distance == 0) {
+    distance = lastError + setpoint;  // Usar la última distancia conocida
+  }
   
   // Calcular error
   error = setpoint - distance;
@@ -102,28 +113,6 @@ void loop() {
   Serial.println(output);
   
   delay(50);  // Pequeño retardo para estabilidad
-}
-
-float readUltrasonicDistance() {
-  // Enviar pulso de trigger
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIG_PIN, LOW);
-  
-  // Leer el tiempo del pulso echo
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000);  // Timeout de 30ms
-  
-  // Calcular distancia en cm
-  float dist = duration * 0.034 / 2.0;
-  
-  // Validar lectura
-  if (dist == 0 || dist > 400) {
-    return distance;  // Retornar la última lectura válida si falla
-  }
-  
-  return dist;
 }
 
 void controlMotor(float pwmValue) {

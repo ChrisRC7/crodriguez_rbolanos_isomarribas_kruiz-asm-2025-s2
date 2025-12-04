@@ -1,0 +1,34 @@
+
+/*
+ * Modelo identificado del motor DC
+ * Generado automáticamente
+ */
+
+// Función de transferencia continua:
+// G(s) = 999.7414 / (0.2995*s + 1)
+
+// Modelo discretizado (Ts = 0.1887 s):
+// Ecuación en diferencias:
+// y[k] = 0.521038*y[k-1] + 1197.095483*u[k] + 1197.095483*u[k-1]
+
+#define K_MOTOR 999.7414f      // RPM/V
+#define TAU_MOTOR 0.2995f  // s
+#define TS_SAMPLE 0.1887f             // s
+
+// Coeficientes de la ecuación en diferencias
+#define A1 0.521038f
+#define B0 1197.095483f
+#define B1 1197.095483f
+
+float y_prev = 0.0;  // y[k-1]
+float u_prev = 0.0;  // u[k-1]
+
+float actualizar_modelo(float u) {
+    float y = A1 * y_prev + B0 * u + B1 * u_prev;
+    
+    // Actualizar estados
+    y_prev = y;
+    u_prev = u;
+    
+    return y;
+}

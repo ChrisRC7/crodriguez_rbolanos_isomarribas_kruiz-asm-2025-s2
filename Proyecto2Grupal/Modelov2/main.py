@@ -2,7 +2,7 @@
 ============================================================================
 IDENTIFICACIÓN DE MODELO FÍSICO - MOTOR DC CON PUERTA CORREDIZA
 Proyecto: Control de Velocidad de Puerta Corrediza
-Método: Respuesta al Escalón (Step Response)
+Método: Respuesta al Escalón (Step Response) - SEGUNDO ORDEN
 
 Equivalente a System Identification Toolbox de MATLAB usando Python
 ============================================================================
@@ -21,12 +21,21 @@ plt.rcParams['font.size'] = 10
 # ============================================================================
 # PARÁMETROS DE LA PLANTA - MODIFICAR AQUÍ
 # ============================================================================
-K_real = 600       # Ganancia RPM/V (reducida por carga de 1kg)
-tau_real = 0.4     # Constante de tiempo (s) - mayor por inercia de la puerta
-V_escalon = 5      # Voltaje aplicado (V) - voltaje medio de operación
-dt = 0.02          # Período de muestreo: 50 Hz
-t_final = 3        # Duración de la simulación (segundos)
-ruido_amplitud = 30  # Amplitud del ruido (RPM)
+# Especificaciones del motor
+V_escalon = 12.0      # Voltaje nominal (V DC)
+Potencia = 40.0       # Potencia nominal (W)
+RPM_nominal = 2400.0  # Velocidad nominal (RPM)
+
+# Parámetros del sistema de segundo orden
+# G(s) = K * wn^2 / (s^2 + 2*zeta*wn*s + wn^2)
+K_real = RPM_nominal / V_escalon  # Ganancia: 200 RPM/V
+wn_real = 8.0         # Frecuencia natural (rad/s) - ajustar según respuesta deseada
+zeta_real = 0.6       # Factor de amortiguamiento (0 < zeta < 1 para subamortiguado)
+
+# Parámetros de simulación
+dt = 0.01             # Período de muestreo: 100 Hz (más rápido para segundo orden)
+t_final = 3.0         # Duración de la simulación (segundos)
+ruido_amplitud = 20.0 # Amplitud del ruido (RPM)
 
 # ============================================================================
 # 1. GENERAR DATOS DE SIMULACIÓN
@@ -34,12 +43,21 @@ ruido_amplitud = 30  # Amplitud del ruido (RPM)
 def generar_datos_simulacion():
     """
     Genera datos de simulación basados en los parámetros configurados
+    Sistema de segundo orden: G(s) = K*wn^2 / (s^2 + 2*zeta*wn*s + wn^2)
     """
     # Generar tiempo
     tiempo = np.arange(0, t_final, dt)
     
-    # Respuesta teórica + ruido
-    velocidad_teorica = K_real * V_escalon * (1 - np.exp(-tiempo/tau_real))
+    # Crear sistema de segundo orden
+    num = [K_real * wn_real**2]
+    den = [1, 2*zeta_real*wn_real, wn_real**2]
+    sistema = signal.TransferFunction(num, den)
+    
+    # Generar respuesta al escalón
+    t_sim, velocidad_teorica = signal.step(sistema, T=tiempo)
+    velocidad_teorica = velocidad_teorica * V_escalon
+    
+    # Añadir ruido
     ruido = ruido_amplitud * np.random.randn(len(tiempo))
     velocidad = velocidad_teorica + ruido
     velocidad = np.maximum(velocidad, 0)  # No negativas
@@ -55,62 +73,85 @@ def generar_datos_simulacion():
 # ============================================================================
 # 2. IDENTIFICACIÓN DEL MODELO
 # ============================================================================
-def modelo_primer_orden(t, K, tau, t0=0):
-    """Modelo teórico de primer orden"""
-    t_shifted = t - t0
-    t_shifted = np.maximum(t_shifted, 0)
-    return K * (1 - np.exp(-t_shifted/tau))
+def modelo_segundo_orden(t, K, wn, zeta):
+    """Modelo teórico de segundo orden"""
+    num = [K * wn**2]
+    den = [1, 2*zeta*wn, wn**2]
+    sistema = signal.TransferFunction(num, den)
+    _, y = signal.step(sistema, T=t)
+    return y
 
 def identificar_modelo_ajuste(tiempo, velocidad, voltaje_escalon):
     """
     Identificación por ajuste de curva (curve fitting)
-    Equivalente a tfest() de MATLAB
+    Sistema de segundo orden: G(s) = K*wn^2 / (s^2 + 2*zeta*wn*s + wn^2)
     """
     
     # Valores iniciales inteligentes
     vel_final = np.mean(velocidad[-20:])
-    K_init = vel_final
-    tau_init = 0.3
+    K_init = vel_final / voltaje_escalon
+    wn_init = 5.0
+    zeta_init = 0.7
     
     try:
         # Ajuste de curva con bounds
         popt, pcov = curve_fit(
-            modelo_primer_orden, 
+            modelo_segundo_orden, 
             tiempo, 
             velocidad,
-            p0=[K_init, tau_init],
-            bounds=([0, 0.01], [vel_final*2, 5.0]),
-            maxfev=5000
+            p0=[K_init, wn_init, zeta_init],
+            bounds=([0, 0.1, 0.01], [K_init*2, 50.0, 2.0]),
+            maxfev=10000
         )
         
-        K_id, tau_id = popt
+        K_id, wn_id, zeta_id = popt
         
         # Calcular modelo ajustado
-        y_ajustado = modelo_primer_orden(tiempo, K_id, tau_id)
+        y_ajustado = modelo_segundo_orden(tiempo, K_id, wn_id, zeta_id)
         
         # Calcular métricas de ajuste
         residuos = velocidad - y_ajustado
         ss_res = np.sum(residuos**2)
         ss_tot = np.sum((velocidad - np.mean(velocidad))**2)
         r2 = 1 - (ss_res / ss_tot)
-        fit_percent = r2 * 100  # Similar al "fit" de MATLAB
+        fit_percent = r2 * 100
         rmse = np.sqrt(np.mean(residuos**2))
         
-        # Ganancia normalizada por voltaje
-        K_normalizado = K_id / voltaje_escalon
+        # Calcular polos
+        a = 1
+        b = 2*zeta_id*wn_id
+        c = wn_id**2
+        discriminante = b**2 - 4*a*c
         
-        # Calcular polo
-        polo = -1/tau_id
+        if discriminante >= 0:
+            polo1 = (-b + np.sqrt(discriminante)) / (2*a)
+            polo2 = (-b - np.sqrt(discriminante)) / (2*a)
+        else:
+            real = -b / (2*a)
+            imag = np.sqrt(-discriminante) / (2*a)
+            polo1 = complex(real, imag)
+            polo2 = complex(real, -imag)
+        
+        # Calcular overshoot y tiempo de asentamiento
+        if zeta_id < 1:
+            overshoot = 100 * np.exp(-np.pi * zeta_id / np.sqrt(1 - zeta_id**2))
+        else:
+            overshoot = 0
+        
+        ts = 4 / (zeta_id * wn_id)  # Tiempo de asentamiento (2%)
         
         return {
-            'metodo': 'Ajuste de curva',
-            'K': K_normalizado,
-            'tau': tau_id,
-            'polo': polo,
+            'metodo': 'Ajuste de curva - Segundo Orden',
+            'K': K_id,
+            'wn': wn_id,
+            'zeta': zeta_id,
+            'polo1': polo1,
+            'polo2': polo2,
             'fit': fit_percent,
             'rmse': rmse,
-            'y_modelo': y_ajustado,
-            'K_total': K_id
+            'overshoot': overshoot,
+            'ts': ts,
+            'y_modelo': y_ajustado
         }
         
     except Exception as e:
@@ -119,8 +160,7 @@ def identificar_modelo_ajuste(tiempo, velocidad, voltaje_escalon):
 
 def identificar_modelo_63(tiempo, velocidad, voltaje_escalon):
     """
-    Identificación por método del 63.2%
-    Método clásico de identificación
+    Análisis básico de respuesta para segundo orden
     """
     
     # Suavizar datos
@@ -133,41 +173,35 @@ def identificar_modelo_63(tiempo, velocidad, voltaje_escalon):
     # Ganancia
     K = vel_final / voltaje_escalon
     
-    # Constante de tiempo (63.2% del valor final)
-    vel_63 = 0.632 * vel_final
-    idx_63 = np.where(velocidad_suave >= vel_63)[0]
-    
-    if len(idx_63) > 0:
-        tau = tiempo[idx_63[0]]
-        polo = -1/tau
-        idx_punto = idx_63[0]
-    else:
-        tau = None
-        polo = None
-        idx_punto = None
+    # Encontrar pico máximo (overshoot)
+    idx_max = np.argmax(velocidad_suave)
+    vel_max = velocidad_suave[idx_max]
+    overshoot_pct = ((vel_max - vel_final) / vel_final) * 100 if vel_final > 0 else 0
+    tiempo_pico = tiempo[idx_max]
     
     return {
-        'metodo': 'Método 63.2%',
+        'metodo': 'Análisis de respuesta',
         'K': K,
-        'tau': tau,
-        'polo': polo,
         'vel_final': vel_final,
-        'vel_63': vel_63,
-        'idx_63': idx_punto,
+        'vel_max': vel_max,
+        'overshoot': overshoot_pct,
+        'tiempo_pico': tiempo_pico,
+        'idx_max': idx_max,
         'velocidad_suave': velocidad_suave
     }
 
 # ============================================================================
 # 3. ANÁLISIS DE FRECUENCIAS Y DISCRETIZACIÓN
 # ============================================================================
-def analizar_frecuencias(K, tau):
+def analizar_frecuencias(K, wn, zeta):
     """
     Calcula ancho de banda y frecuencias de muestreo recomendadas
+    Para sistema de segundo orden
     """
     
     # Crear función de transferencia
-    num = [K]
-    den = [tau, 1]
+    num = [K * wn**2]
+    den = [1, 2*zeta*wn, wn**2]
     sys = signal.TransferFunction(num, den)
     
     # Calcular ancho de banda (-3dB)
@@ -180,7 +214,7 @@ def analizar_frecuencias(K, tau):
     if len(idx_3db) > 0:
         BW_rad = w_rad[idx_3db[0]]
     else:
-        BW_rad = 1/tau  # Aproximación
+        BW_rad = wn  # Aproximación para segundo orden
     
     BW_hz = BW_rad / (2*np.pi)
     
@@ -224,12 +258,12 @@ def graficar_resultados(tiempo, velocidad, modelo_ajuste, modelo_63,
                         analisis_freq, voltaje_escalon, dt):
     """
     Genera todas las gráficas necesarias para el reporte
-    Equivalente a las figuras de MATLAB
+    Sistema de segundo orden
     """
     
     # FIGURA 1: Validación del Modelo (6 subplots)
     fig1 = plt.figure(figsize=(16, 10))
-    fig1.suptitle('IDENTIFICACIÓN DEL MODELO - RESPUESTA AL ESCALÓN', 
+    fig1.suptitle('IDENTIFICACIÓN DEL MODELO - RESPUESTA AL ESCALÓN (SEGUNDO ORDEN)', 
                   fontsize=16, fontweight='bold')
     
     # Subplot 1: Respuesta temporal
@@ -241,48 +275,52 @@ def graficar_resultados(tiempo, velocidad, modelo_ajuste, modelo_63,
     ax1.plot(tiempo, modelo_ajuste['y_modelo'], 'r-', linewidth=2, 
              label='Modelo identificado')
     
-    # Marcar punto de 63.2%
-    if modelo_63['idx_63'] is not None:
-        idx = modelo_63['idx_63']
-        ax1.plot(tiempo[idx], modelo_63['velocidad_suave'][idx], 'ro', 
-                markersize=10, markerfacecolor='red', markeredgewidth=2)
-        ax1.axhline(y=modelo_63['vel_63'], color='orange', 
-                   linestyle='--', alpha=0.6)
-        ax1.axvline(x=modelo_63['tau'], color='orange', 
-                   linestyle='--', alpha=0.6)
-        ax1.text(modelo_63['tau']+0.1, modelo_63['vel_63'], 
-                f"τ={modelo_63['tau']:.3f}s", fontsize=10, 
+    # Marcar pico máximo (overshoot)
+    if modelo_63['idx_max'] is not None:
+        idx = modelo_63['idx_max']
+        ax1.plot(tiempo[idx], modelo_63['velocidad_suave'][idx], 'mo', 
+                markersize=10, markerfacecolor='magenta', markeredgewidth=2)
+        ax1.axhline(y=modelo_63['vel_final'], color='orange', 
+                   linestyle='--', alpha=0.6, label='Valor final')
+        ax1.text(tiempo[idx]+0.1, modelo_63['vel_max'], 
+                f"OS={modelo_63['overshoot']:.1f}%", fontsize=10, 
                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
     ax1.set_xlabel('Tiempo (s)', fontsize=11)
     ax1.set_ylabel('Velocidad (RPM)', fontsize=11)
     ax1.set_title(f"Respuesta al Escalón (Ajuste: {modelo_ajuste['fit']:.1f}%)", 
                  fontsize=12, fontweight='bold')
-    ax1.legend(loc='lower right')
+    ax1.legend(loc='best')
     ax1.grid(True, alpha=0.3)
     
     # Subplot 2: Diagrama de Polos y Ceros
     ax2 = plt.subplot(2, 3, 2)
-    polo = modelo_ajuste['polo']
-    ax2.plot(polo, 0, 'rx', markersize=20, markeredgewidth=3, 
-            label='Polo')
+    polo1 = modelo_ajuste['polo1']
+    polo2 = modelo_ajuste['polo2']
+    
+    if isinstance(polo1, complex):
+        ax2.plot(np.real(polo1), np.imag(polo1), 'rx', markersize=20, markeredgewidth=3)
+        ax2.plot(np.real(polo2), np.imag(polo2), 'rx', markersize=20, markeredgewidth=3, 
+                label='Polos')
+        ax2.text(np.real(polo1), np.imag(polo1)+0.5, 
+                f's = {polo1:.2f}', fontsize=9, ha='center',
+                bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+    else:
+        ax2.plot(polo1, 0, 'rx', markersize=20, markeredgewidth=3, label='Polos')
+        ax2.plot(polo2, 0, 'rx', markersize=20, markeredgewidth=3)
+        ax2.text(polo1, 0.5, f's₁ = {polo1:.2f}', fontsize=9, ha='center',
+                bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+        ax2.text(polo2, -0.5, f's₂ = {polo2:.2f}', fontsize=9, ha='center',
+                bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+    
     ax2.axhline(y=0, color='k', linewidth=0.5)
     ax2.axvline(x=0, color='k', linewidth=0.5)
-    
-    # Círculo en origen
-    circle = plt.Circle((0, 0), 0.5, fill=False, color='gray', 
-                       linestyle='--', alpha=0.3)
-    ax2.add_patch(circle)
     
     ax2.set_xlabel('Parte Real', fontsize=11)
     ax2.set_ylabel('Parte Imaginaria', fontsize=11)
     ax2.set_title('Diagrama de Polos y Ceros', fontsize=12, fontweight='bold')
     ax2.grid(True, alpha=0.3)
     ax2.legend()
-    ax2.text(polo, 0.3, f's = {polo:.2f}', fontsize=11, ha='center',
-            bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
-    ax2.set_xlim([polo*1.5, 1])
-    ax2.set_ylim([-2, 2])
     ax2.set_aspect('equal')
     
     # Subplot 3: Error de ajuste
@@ -311,9 +349,9 @@ def graficar_resultados(tiempo, velocidad, modelo_ajuste, modelo_63,
     
     # Fase
     ax5 = plt.subplot(2, 3, 5)
-    _, h = signal.freqs([modelo_ajuste['K_total']], 
-                       [modelo_ajuste['tau'], 1], 
-                       worN=analisis_freq['w'])
+    num_bode = [modelo_ajuste['K'] * modelo_ajuste['wn']**2]
+    den_bode = [1, 2*modelo_ajuste['zeta']*modelo_ajuste['wn'], modelo_ajuste['wn']**2]
+    _, h = signal.freqs(num_bode, den_bode, worN=analisis_freq['w'])
     fase = np.angle(h) * 180/np.pi
     ax5.semilogx(analisis_freq['w'], fase, 'b-', linewidth=2)
     ax5.set_xlabel('Frecuencia (rad/s)', fontsize=11)
@@ -329,12 +367,14 @@ def graficar_resultados(tiempo, velocidad, modelo_ajuste, modelo_63,
 ╔═══════════════════════════════════════╗
 ║   PARÁMETROS IDENTIFICADOS            ║
 ╠═══════════════════════════════════════╣
-║  Modelo: G(s) = K/(τs + 1)            ║
+║  Modelo: G(s) = K·ωₙ²/(s²+2ζωₙs+ωₙ²)  ║
 ║                                       ║
 ║  K = {modelo_ajuste['K']:.2f} RPM/V                ║
-║  τ = {modelo_ajuste['tau']:.4f} s                  ║
-║  Polo = {modelo_ajuste['polo']:.2f} rad/s             ║
+║  ωₙ = {modelo_ajuste['wn']:.2f} rad/s               ║
+║  ζ = {modelo_ajuste['zeta']:.3f}                      ║
 ║                                       ║
+║  Overshoot: {modelo_ajuste['overshoot']:.1f}%               ║
+║  Ts (2%): {modelo_ajuste['ts']:.3f} s                  ║
 ║  Ajuste: {modelo_ajuste['fit']:.1f}%                     ║
 ║  RMSE: {modelo_ajuste['rmse']:.2f} RPM                   ║
 ╠═══════════════════════════════════════╣
@@ -424,12 +464,16 @@ def main():
     """Función principal para ejecutar todo el proceso"""
     
     print("="*70)
-    print(" IDENTIFICACIÓN DE MODELO FÍSICO - MOTOR DC")
+    print(" IDENTIFICACIÓN DE MODELO FÍSICO - MOTOR DC (SEGUNDO ORDEN)")
     print("="*70)
+    print(f"\nEspecificaciones del motor:")
+    print(f"  Voltaje: {V_escalon} V DC")
+    print(f"  Potencia: {Potencia} W")
+    print(f"  RPM nominal: {RPM_nominal} RPM")
     print(f"\nParámetros de la planta:")
-    print(f"  K = {K_real} RPM/V")
-    print(f"  τ = {tau_real} s")
-    print(f"  V = {V_escalon} V")
+    print(f"  K = {K_real:.2f} RPM/V")
+    print(f"  ωₙ = {wn_real} rad/s")
+    print(f"  ζ = {zeta_real}")
     print(f"  Ruido = {ruido_amplitud} RPM")
     
     # 1. Generar datos de simulación
@@ -445,21 +489,22 @@ def main():
         return
     
     print(f"  ✓ K = {modelo_ajuste['K']:.2f} RPM/V")
-    print(f"  ✓ τ = {modelo_ajuste['tau']:.4f} s")
-    print(f"  ✓ Polo = {modelo_ajuste['polo']:.2f} rad/s")
+    print(f"  ✓ ωₙ = {modelo_ajuste['wn']:.2f} rad/s")
+    print(f"  ✓ ζ = {modelo_ajuste['zeta']:.3f}")
+    print(f"  ✓ Overshoot = {modelo_ajuste['overshoot']:.1f}%")
+    print(f"  ✓ Ts (2%) = {modelo_ajuste['ts']:.3f} s")
     print(f"  ✓ Ajuste = {modelo_ajuste['fit']:.1f}%")
     
-    # 3. Identificar modelo por método 63.2%
-    print("\n[3/5] Validando con método del 63.2%...")
+    # 3. Análisis básico de respuesta
+    print("\n[3/5] Analizando respuesta...")
     modelo_63 = identificar_modelo_63(tiempo, velocidad, V_escalon)
     
-    if modelo_63['tau'] is not None:
-        print(f"  ✓ K (63.2%) = {modelo_63['K']:.2f} RPM/V")
-        print(f"  ✓ τ (63.2%) = {modelo_63['tau']:.4f} s")
+    print(f"  ✓ K (medido) = {modelo_63['K']:.2f} RPM/V")
+    print(f"  ✓ Overshoot (medido) = {modelo_63['overshoot']:.1f}%")
     
     # 4. Analizar frecuencias
     print("\n[4/5] Analizando frecuencias y discretización...")
-    analisis = analizar_frecuencias(modelo_ajuste['K_total'], modelo_ajuste['tau'])
+    analisis = analizar_frecuencias(modelo_ajuste['K'], modelo_ajuste['wn'], modelo_ajuste['zeta'])
     
     print(f"  ✓ Ancho de banda: {analisis['BW_hz']:.2f} Hz")
     print(f"  ✓ Frecuencia recomendada: {analisis['fs_recomendada']:.2f} Hz")
@@ -475,12 +520,22 @@ def main():
     print("\n" + "="*70)
     print(" RESUMEN FINAL")
     print("="*70)
-    print(f"\nModelo identificado:")
-    print(f"  G(s) = {modelo_ajuste['K']:.2f} / ({modelo_ajuste['tau']:.4f}s + 1)")
+    print(f"\nModelo identificado (segundo orden):")
+    print(f"  G(s) = {modelo_ajuste['K']:.2f}·{modelo_ajuste['wn']:.2f}² / (s² + {2*modelo_ajuste['zeta']*modelo_ajuste['wn']:.2f}s + {modelo_ajuste['wn']:.2f}²)")
     print(f"\nPolos y Ceros:")
-    print(f"  Polos: s = {modelo_ajuste['polo']:.2f} rad/s")
-    print(f"  Ceros: Ninguno (sistema de primer orden puro)")
-    print(f"\nAjuste: {modelo_ajuste['fit']:.1f}%")
+    if isinstance(modelo_ajuste['polo1'], complex):
+        print(f"  Polos complejos conjugados:")
+        print(f"    s₁ = {modelo_ajuste['polo1']:.3f}")
+        print(f"    s₂ = {modelo_ajuste['polo2']:.3f}")
+    else:
+        print(f"  Polos reales:")
+        print(f"    s₁ = {modelo_ajuste['polo1']:.3f}")
+        print(f"    s₂ = {modelo_ajuste['polo2']:.3f}")
+    print(f"  Ceros: Ninguno")
+    print(f"\nCaracterísticas de la respuesta:")
+    print(f"  Overshoot: {modelo_ajuste['overshoot']:.1f}%")
+    print(f"  Tiempo de asentamiento (2%): {modelo_ajuste['ts']:.3f} s")
+    print(f"  Ajuste del modelo: {modelo_ajuste['fit']:.1f}%")
     print(f"\nFrecuencia de muestreo recomendada: {analisis['fs_recomendada']:.2f} Hz")
     print(f"Período de muestreo: {analisis['Ts_recomendado']*1000:.2f} ms")
     print("\n✓ Proceso completado exitosamente!")

@@ -33,14 +33,14 @@ def generar_datos_simulacion():
     
     # Especificaciones del motor DC:
     # - Voltaje nominal: 12V DC
-    # - Potencia: ~40W
+    # - Potencia: ~24W
     # - Velocidad sin carga: ~2400 RPM
-    # - Puerta: 1 kg
+    # - Puerta: 0.3 kg (300 g)
     
-    # Parámetros del sistema real (con carga de 1kg)
+    # Parámetros del sistema real (con carga de 0.3 kg - 300 g)
     # Ganancia teórica sin carga: 2400 RPM / 12V = 200 RPM/V
     # Con carga se reduce ~50% por fricción e inercia
-    K_real = 100        # Ganancia RPM/V (con carga de 1kg, reducida 50%)
+    K_real = 100        # Ganancia RPM/V (con carga de 0.3 kg (300 g), reducida 50%)
     wn_real = 4.0       # Frecuencia natural (rad/s) - más lento que motor rápido
     zeta_real = 0.9     # Factor de amortiguamiento (sobreamortiguado)
     V_escalon = 6.0     # Voltaje aplicado (V) - 50% del nominal para control
@@ -67,7 +67,7 @@ def generar_datos_simulacion():
     
     fs = 1/dt
     print(f"  Motor: 12V DC, 40W, 2400 RPM (sin carga)")
-    print(f"  Carga: Puerta de 1 kg")
+    print(f"  Carga: Puerta de 0.3 kg (300 g)")
     
     return tiempo, velocidad, dt, V_escalon
 
